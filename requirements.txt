@@ -1,0 +1,16 @@
+fastapi
+uvicorn[standard]
+streamlit
+google-generativeai
+pinecone
+gitpython
+tree-sitter==0.21.3
+tree-sitter-python==0.21.0
+tree-sitter-javascript==0.21.3
+networkx
+rank-bm25
+python-dotenv
+requests
+pyparsing
+httpx
+aiofiles
