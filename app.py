@@ -10,6 +10,7 @@ Architecture notes:
 - The special <!--SOURCES:...--> trailer is stripped and rendered as an expander
 """
 
+import os
 import json
 import time
 from typing import Optional
@@ -21,7 +22,7 @@ import streamlit as st
 # Config
 # ---------------------------------------------------------------------------
 
-BACKEND_URL = "http://localhost:8000"
+BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 
 st.set_page_config(
     page_title="CodeoGraph",
