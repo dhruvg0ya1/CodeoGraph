@@ -19,7 +19,11 @@
 
 ---
 
-[![Watch the video](https://youtube.com)](https://www.youtube.com/watch?v=HWVfFtDU9rg)
+## Watch Demo
+
+https://github.com/user-attachments/assets/9c26889f-01f6-42c5-80a6-cae4397459ce
+
+[pls watch the video on yt](https://www.youtube.com/watch?v=HWVfFtDU9rg) 👉🏼👈🏼
 
 ---
 
