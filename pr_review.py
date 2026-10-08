@@ -3,6 +3,12 @@ pr_review.py
 
 PR Review Agent — parses a raw git diff, retrieves codebase context around
 changed symbols, and asks Gemini for a structured senior-engineer review.
+
+Diff parsing strategy:
+- Split on "diff --git" headers to get per-file diffs
+- Extract +++ filenames to identify changed files
+- Scan @@ hunk headers for function context (git puts the function name after @@)
+- Collect added/removed lines per hunk
 """
 
 import os
@@ -17,7 +23,6 @@ from retrieval import vector_search
 load_dotenv()
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY", ""))
 
-
 # ---------------------------------------------------------------------------
 # Diff parser
 # ---------------------------------------------------------------------------
@@ -25,6 +30,14 @@ genai.configure(api_key=os.getenv("GOOGLE_API_KEY", ""))
 def _parse_diff(diff_text: str) -> list[dict]:
     """
     Parse raw git diff into structured per-file change records.
+
+    Returns list of:
+    {
+        "file": "src/auth/login.py",
+        "added": ["line1", ...],
+        "removed": ["line1", ...],
+        "functions": ["authenticate_user", ...]   # from @@ context
+    }
     """
     file_diffs = re.split(r"^diff --git ", diff_text, flags=re.MULTILINE)
     results = []
@@ -33,19 +46,22 @@ def _parse_diff(diff_text: str) -> list[dict]:
         if not file_diff.strip():
             continue
 
+        # Extract filename from +++ b/path line
         fname_match = re.search(r"^\+\+\+ b/(.+)$", file_diff, re.MULTILINE)
         if not fname_match:
             continue
-
         file_path = fname_match.group(1).strip()
+
         added: list[str] = []
         removed: list[str] = []
         functions: list[str] = []
 
         for line in file_diff.splitlines():
+            # @@ -l,s +l,s @@ function_name — git adds function context after @@
             hunk_match = re.match(r"^@@ .+@@ (.+)$", line)
             if hunk_match:
                 ctx = hunk_match.group(1).strip()
+                # Extract first word that looks like a function name
                 func_match = re.match(r"(?:def |function |func )?\s*(\w+)", ctx)
                 if func_match:
                     functions.append(func_match.group(1))
@@ -70,7 +86,8 @@ def _parse_diff(diff_text: str) -> list[dict]:
 
 def _retrieve_context(file_diffs: list[dict], namespace: str) -> str:
     """
-    Retrieve related code context from Pinecone.
+    For each changed function, pull relevant chunks from Pinecone.
+    Returns a formatted context block to include in the review prompt.
     """
     context_parts: list[str] = []
     seen_symbols: set[str] = set()
@@ -80,168 +97,101 @@ def _retrieve_context(file_diffs: list[dict], namespace: str) -> str:
             if func in seen_symbols:
                 continue
             seen_symbols.add(func)
-
-            try:
-                results = vector_search(func, namespace, top_k=4)
-            except Exception as e:
-                context_parts.append(f"Context retrieval failed for {func}: {e}")
-                continue
-
-            for meta, score in results:
-                code = meta.get("raw_code", "")[:1400]
+            results = vector_search(func, namespace, top_k=2)
+            for meta, _ in results:
+                code = meta.get("raw_code", "")[:800]
                 lang = meta.get("language", "python")
                 context_parts.append(
-                    f"### SYMBOL: {meta.get('symbol_name')}\n"
-                    f"FILE: {meta.get('file_path')}\n"
-                    f"SIMILARITY: {score:.4f}\n\n"
-                    f"```{lang}\n{code}\n```\n"
+                    f"### `{meta.get('symbol_name')}` — {meta.get('file_path')}\n"
+                    f"```{lang}\n{code}\n```"
                 )
 
-    if not context_parts:
-        return "No additional context retrieved."
-
-    return "\n\n".join(context_parts)
+    return "\n\n".join(context_parts) if context_parts else "No additional context retrieved."
 
 
 # ---------------------------------------------------------------------------
-# Review prompt
+# Review prompt + Gemini call
 # ---------------------------------------------------------------------------
 
-_REVIEW_SYSTEM = """
-You are a brutally strict Staff Software Engineer reviewing production-critical pull requests.
-
-Your job is to aggressively identify:
-* logic bugs
-* regressions
-* hidden edge cases
-* incorrect defaults
-* cache misuse
-* performance problems
-* race conditions
-* security issues
-* architectural inconsistencies
-* incomplete implementations
-
-Assume the PR is likely flawed until proven otherwise.
-Be highly critical and technical. Never give generic praise.
-Never say "No risks identified" unless absolutely certain.
-
-Always explain:
-1. WHY something is risky
-2. WHAT could break
-3. HOW to fix it
-4. WHAT tests are missing
-"""
+_REVIEW_SYSTEM = (
+    "You are a senior software engineer performing a thorough code review. "
+    "You have deep knowledge of security, correctness, performance, and maintainability. "
+    "Be specific, actionable, and technical. Reference exact line changes when relevant."
+)
 
 _REVIEW_PROMPT_TEMPLATE = """
-You are reviewing the following pull request diff along with retrieved codebase context.
+You are reviewing the following pull request diff along with relevant codebase context.
 
-Think step-by-step through:
-* data flow changes
-* sorting behavior
-* fallback behavior
-* cache implications
-* state mutations
-* API usage
-* edge cases
-* regression risks
-
-==================================================
-GIT DIFF
-========
-
+## GIT DIFF
 ```diff
 {diff}
 ```
 
-==================================================
-CODEBASE CONTEXT
-================
-
+## CODEBASE CONTEXT (functions/classes related to the changes)
 {context}
 
-==================================================
-OUTPUT FORMAT
-=============
-
-Return STRICTLY in this exact format:
+Provide a structured review with these exact sections:
 
 **SUMMARY**
-
-<summary>
+What changed and the apparent intent of this PR.
 
 **RISKS**
-
-* [High] ...
-* [Medium] ...
-* [Low] ...
+Potential bugs, edge cases missed, security vulnerabilities, or breaking changes.
+Be specific about which lines or functions are risky.
 
 **SUGGESTED TESTS**
-
-* ...
+Concrete test cases to write. Include function signatures or pytest-style examples.
 
 **RISK SCORE**
-High / Medium / Low
-
-Reasoning: ...
+One of: Low / Medium / High
+Followed by one paragraph justification.
 
 **AFFECTED SYMBOLS**
-symbol1, symbol2
-
-==================================================
-IMPORTANT REVIEW RULES
-======================
-
-* Be opinionated and critical
-* Mention exact risky changes
-* Detect hidden regressions
-* Detect ranking inconsistencies
-* Detect cache misuse
-* Detect unsupported edge cases
-* Detect sorting conflicts
-* Detect incorrect defaults
-* Detect stale cache risks
-* Detect performance regressions
-* Explain business impact
+Comma-separated list of function/class names that may be impacted.
 """
 
 
-# ---------------------------------------------------------------------------
-# Structured section extraction
-# ---------------------------------------------------------------------------
-
-def extract_section(text: str, header: str, next_header: Optional[str] = None) -> str:
-    if next_header:
-        pattern = (
-            rf"\*\*{re.escape(header)}\*\*\s*(.*?)"
-            rf"(?=\*\*{re.escape(next_header)}\*\*)"
-        )
-    else:
-        pattern = rf"\*\*{re.escape(header)}\*\*\s*(.*)"
-
-    match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
-    if not match:
-        return ""
-    return match.group(1).strip()
-
-
-# ---------------------------------------------------------------------------
-# Main review pipeline
-# ---------------------------------------------------------------------------
-
 def review_pr(diff_text: str, namespace: str) -> dict:
+    """
+    Full PR review pipeline.
+
+    Returns:
+    {
+        "summary": "...",
+        "risks": "...",
+        "suggested_tests": "...",
+        "risk_score": "Medium",
+        "risk_justification": "...",
+        "affected_symbols": ["login_route", "validate_token"],
+        "raw_review": "..."   # full Gemini output for markdown export
+    }
+    """
     file_diffs = _parse_diff(diff_text)
     context = _retrieve_context(file_diffs, namespace)
 
-    truncated_diff = diff_text[:6000]
-    if len(diff_text) > 6000:
-        truncated_diff += "\n... (diff truncated)"
+    # Truncate diff to 4000 chars to keep total prompt under limits
+    truncated_diff = diff_text[:4000]
+    if len(diff_text) > 4000:
+        truncated_diff += "\n... (diff truncated for length)"
 
     prompt = _REVIEW_PROMPT_TEMPLATE.format(diff=truncated_diff, context=context)
 
-    model = genai.GenerativeModel("gemini-2.5-flash", system_instruction=_REVIEW_SYSTEM)
+    model = genai.GenerativeModel(
+        "gemini-2.5-flash",
+        system_instruction=_REVIEW_SYSTEM,
+    )
     response = model.generate_content(prompt)
-    raw = response.text.strip()
+    raw = response.text
+
+    # Parse structured sections out of the response
+    def extract_section(text: str, header: str, next_header: Optional[str] = None) -> str:
+        pattern = rf"\*\*{re.escape(header)}\*\*\s*\n(.*?)"
+        if next_header:
+            pattern += rf"(?=\*\*{re.escape(next_header)}\*\*)"
+        else:
+            pattern += r"$"
+        match = re.search(pattern, text, re.DOTALL)
+        return match.group(1).strip() if match else ""
 
     summary = extract_section(raw, "SUMMARY", "RISKS")
     risks = extract_section(raw, "RISKS", "SUGGESTED TESTS")
@@ -249,95 +199,61 @@ def review_pr(diff_text: str, namespace: str) -> dict:
     risk_block = extract_section(raw, "RISK SCORE", "AFFECTED SYMBOLS")
     affected_block = extract_section(raw, "AFFECTED SYMBOLS")
 
+    # Extract risk level from risk_block first line
     risk_score = "Medium"
-    risk_reasoning = risk_block
-
+    risk_justification = risk_block
+    first_line = risk_block.splitlines()[0] if risk_block else ""
     for level in ("High", "Medium", "Low"):
-        if level.lower() in risk_block.lower():
+        if level in first_line:
             risk_score = level
-            split_lines = risk_block.splitlines()
-            if len(split_lines) > 1:
-                risk_reasoning = "\n".join(split_lines[1:]).strip()
+            risk_justification = "\n".join(risk_block.splitlines()[1:]).strip()
             break
 
-    affected_symbols = []
-    if affected_block:
-        affected_symbols.extend([
-            s.strip()
-            for s in affected_block.replace("\n", ",").split(",")
-            if s.strip()
-        ])
-
+    # Parse affected symbols
+    affected_symbols = [
+        s.strip() for s in affected_block.replace("\n", ",").split(",") if s.strip()
+    ]
+    # Also include symbols detected from diff
     for fd in file_diffs:
         affected_symbols.extend(fd["functions"])
-
-    affected_symbols = sorted(list(set(affected_symbols)))
-
-    if not summary:
-        summary = "Summary extraction failed — see raw review."
-    if not risks:
-        risks = "Risk extraction failed — see raw review."
-    if not tests:
-        tests = "Test extraction failed — see raw review."
+    affected_symbols = list(set(affected_symbols))
 
     return {
-        "summary": summary,
-        "risks": risks,
-        "suggested_tests": tests,
+        "summary": summary or "See full review below.",
+        "risks": risks or "No specific risks identified.",
+        "suggested_tests": tests or "No test suggestions generated.",
         "risk_score": risk_score,
-        "risk_reasoning": risk_reasoning,
+        "risk_justification": risk_justification,
         "affected_symbols": affected_symbols,
         "raw_review": raw,
     }
 
 
-# ---------------------------------------------------------------------------
-# Markdown export
-# ---------------------------------------------------------------------------
-
 def review_to_markdown(review: dict, diff_text: str) -> str:
-    symbols = ", ".join(f"`{s}`" for s in review["affected_symbols"])
+    """Format a review dict as a downloadable markdown report."""
     return f"""# PR Review Report
 
 ## Risk Score: {review['risk_score']}
-
-{review['risk_reasoning']}
+{review['risk_justification']}
 
 ---
 
 ## Summary
-
 {review['summary']}
 
----
-
 ## Risks
-
 {review['risks']}
 
----
-
 ## Suggested Tests
-
 {review['suggested_tests']}
 
----
-
 ## Affected Symbols
-
-{symbols}
-
----
-
-## Raw Gemini Review
-
-{review['raw_review']}
+{', '.join(f'`{s}`' for s in review['affected_symbols'])}
 
 ---
 
 ## Original Diff
-
 ```diff
-{diff_text[:4000]}
+{diff_text[:3000]}
 ```
 """

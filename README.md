@@ -1,6 +1,6 @@
 # 🤖 CodeoGraph
 
-**AI-powered codebase understanding agent.** Index any GitHub repo and chat with it, analyze change impact, review PRs, and visualize architecture - all grounded in your actual source code.
+**AI-powered codebase understanding agent.** Index any GitHub repo and chat with it, analyze change impact, review PRs, and visualize architecture — all grounded in your actual source code.
 
 ---
 
