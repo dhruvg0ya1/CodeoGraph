@@ -105,3 +105,12 @@ backend/main.py (FastAPI)
 - **Rate limits**: Embedding batches sleep 1s between calls. For large repos (500+ files) expect 5–15 min indexing.
 - **Pinecone index dimension**: If the existing index was created with a different embedding model, delete it or set a new `PINECONE_INDEX_NAME` before re-indexing.
 - **Token safety**: Prompts are capped at 6000 context tokens before sending to Gemini.
+
+
+## Interface Screenshots
+
+![CodeoGraph UI](./screenshots/01_codebase_graph_and_search.png)
+
+## Video Walkthrough
+
+A full 1080p Loom-style product walkthrough is available at [`videos/loom_demo_walkthrough.mp4`](./videos/loom_demo_walkthrough.mp4).
