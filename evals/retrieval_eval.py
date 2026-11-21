@@ -120,9 +120,11 @@ def table(results: list[dict], url: str, ref: str) -> str:
                      f"{b}{r['mrr@10']:.3f}{b} | {r['ndcg@10']:.3f} | {r['p50_ms']:.0f} ms |")
     r0 = results[0]
     where = "a GitHub Actions CPU runner" if os.environ.get("GITHUB_ACTIONS") else "a laptop CPU"
+    names = sorted({r["model"] for r in results})
+    models_txt = ("embedder " if len(names) == 1 else "embedders ") + ", ".join(f"`{n}`" for n in names)
     lines.append("")
     lines.append(f"{r0['questions']} questions on [`{Path(url).name}` {ref}]({url}/tree/{ref}) ({r0['chunks']} chunks), "
-                 f"embedder `{r0['model']}` on {where}. Reproduce: `python evals/retrieval_eval.py`.")
+                 f"{models_txt} on {where}. Reproduce: `python evals/retrieval_eval.py`.")
     return "\n".join(lines)
 
 
