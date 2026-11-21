@@ -23,3 +23,8 @@ env/
 Thumbs.db
 *.swp
 *.swo
+
+# Local indexes and models (CODEOGRAPH_HOME defaults to ~/.codeograph)
+.codeograph/
+evals/.cache/
+indexed_repos.json

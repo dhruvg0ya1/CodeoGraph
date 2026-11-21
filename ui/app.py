@@ -1,7 +1,8 @@
 """
-frontend/app.py
+ui/app.py - CodeoGraph's Streamlit UI.
 
-RepoChat — Streamlit UI.
+    codeograph serve            # the API, in one terminal
+    streamlit run ui/app.py     # this UI, in another
 
 Architecture notes:
 - All API calls go to the FastAPI backend at BACKEND_URL (default localhost:8000)
@@ -546,7 +547,7 @@ def page_chat():
         filter_file = st.text_input("Filter by file", placeholder="src/auth.py")
         filter_type = st.selectbox(
             "Filter by type",
-            ["(none)", "function", "class", "module"],
+            ["(none)", "function", "method", "class", "module", "type"],
         )
         filter_type_val = None if filter_type == "(none)" else filter_type
         filter_file_val = filter_file.strip() or None
