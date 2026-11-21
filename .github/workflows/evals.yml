@@ -43,10 +43,14 @@ jobs:
         run: |
           git config user.name "codeograph-evals"
           git config user.email "codeograph-evals@users.noreply.github.com"
-          git add README.md evals/results
-          git diff --cached --quiet && exit 0
-          git commit -q -m "evals: retrieval results [skip ci]"
-          for i in 1 2 3; do git pull --rebase -q && git push -q && exit 0; done
+          mkdir -p /tmp/new && cp evals/results/retrieval.json evals/results/retrieval.md /tmp/new/
+          for i in 1 2 3; do
+            git fetch -q origin main && git reset -q --hard origin/main
+            cp /tmp/new/* evals/results/ && .venv/bin/python evals/update_readme.py
+            git add README.md evals/results
+            git diff --cached --quiet && exit 0
+            git commit -q -m "evals: retrieval results [skip ci]" && git push -q && exit 0
+          done
           exit 1
 
   answers:
@@ -89,8 +93,12 @@ jobs:
         run: |
           git config user.name "codeograph-evals"
           git config user.email "codeograph-evals@users.noreply.github.com"
-          git add README.md evals/results
-          git diff --cached --quiet && exit 0
-          git commit -q -m "evals: answer results [skip ci]"
-          for i in 1 2 3; do git pull --rebase -q && git push -q && exit 0; done
+          mkdir -p /tmp/new && cp evals/results/answers.json evals/results/answers.md /tmp/new/
+          for i in 1 2 3; do
+            git fetch -q origin main && git reset -q --hard origin/main
+            cp /tmp/new/* evals/results/ && .venv/bin/python evals/update_readme.py
+            git add README.md evals/results
+            git diff --cached --quiet && exit 0
+            git commit -q -m "evals: answer results [skip ci]" && git push -q && exit 0
+          done
           exit 1
