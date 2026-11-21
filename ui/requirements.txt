@@ -1,1 +1,1 @@
-codeograph[ui] @ git+https://github.com/dhruvg0ya1/CodeoGraph
+codeograph[ui,gemini] @ git+https://github.com/dhruvg0ya1/CodeoGraph

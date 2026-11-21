@@ -8,6 +8,7 @@ progress; the demo repositories index themselves on the first visit.
 
 from __future__ import annotations
 
+import contextlib
 import html
 import json
 import os
@@ -34,6 +35,8 @@ DEMOS = {"psf/requests": "https://github.com/psf/requests",
 AUTO_DEMOS = [] if os.environ.get("CODEOGRAPH_NO_DEMOS") else ["https://github.com/psf/requests",
                                                                  "https://github.com/dhruvg0ya1/CodeoGraph"]
 REPO = "https://github.com/dhruvg0ya1/CodeoGraph"
+SESSION_LLM_CAP = 15          # written answers per visitor session on the public demo
+DAILY_LLM_CAP = 150           # written answers per day for the whole app (keeps the free API quota safe)
 
 # --------------------------------------------------------------------------- style
 st.markdown("""
@@ -283,6 +286,31 @@ def dq(s: str) -> str:
     return s.replace("\\", "\\\\").replace('"', '\\"')
 
 
+def llm_allowed() -> bool:
+    """A written (LLM) answer is allowed while this session and today's app-wide count are under their caps."""
+    import datetime as dt
+
+    if llm.get_model() is None:
+        return False
+    if st.session_state.get("_llm_used", 0) >= SESSION_LLM_CAP:
+        return False
+    from codeograph.config import get_settings
+
+    f = get_settings().home / "llm_usage.json"
+    today = dt.date.today().isoformat()
+    try:
+        used = json.loads(f.read_text()) if f.exists() else {}
+    except (OSError, json.JSONDecodeError):
+        used = {}
+    if used.get(today, 0) >= DAILY_LLM_CAP:
+        return False
+    used = {today: used.get(today, 0) + 1}
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps(used))
+    st.session_state["_llm_used"] = st.session_state.get("_llm_used", 0) + 1
+    return True
+
+
 def show_citations(idx: store.RepoIndex, msg: dict) -> None:
     cites = [c for c in msg.get("citations", []) if c.get("cited")] or msg.get("citations", [])[:3]
     for c in cites:
@@ -386,14 +414,20 @@ with t_ask:
         with st.chat_message("assistant"):
             final: dict = {}
 
+            written = llm_allowed()
+
             def tokens():
-                for kind, payload in agent.stream(question, ns, history=past or None):
-                    if kind == "token":
-                        yield payload
-                    else:
-                        final.update(payload)
+                ctx = contextlib.nullcontext() if written else llm.offline()
+                with ctx:
+                    for kind, payload in agent.stream(question, ns, history=past or None):
+                        if kind == "token":
+                            yield payload
+                        else:
+                            final.update(payload)
             with st.spinner("Retrieving, grading and checking citations..."):
                 st.write_stream(tokens())
+            if not written and llm.get_model() is not None:
+                st.caption("The demo's daily limit for written answers is used up, so this one is extractive.")
             msg = {"role": "assistant", "content": final.get("answer", ""), "citations": final.get("citations", []),
                    "trace": final.get("trace", [])}
             show_citations(idx, msg)

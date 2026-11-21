@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import json
 import os
 import re
@@ -21,6 +23,17 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from .config import get_settings
 
 _override: BaseChatModel | None = None
+_offline: contextvars.ContextVar[bool] = contextvars.ContextVar("codeograph_offline", default=False)
+
+
+@contextlib.contextmanager
+def offline():
+    """Run a block as if no LLM were configured (extractive answers) - e.g. when a public demo's quota is used up."""
+    token = _offline.set(True)
+    try:
+        yield
+    finally:
+        _offline.reset(token)
 
 
 def set_model(model: BaseChatModel | None) -> None:
@@ -58,6 +71,8 @@ def _build(name: str, model: str, base_url: str | None) -> BaseChatModel | None:
 
 
 def get_model() -> BaseChatModel | None:
+    if _offline.get():
+        return None
     if _override is not None:
         return _override
     s = get_settings()

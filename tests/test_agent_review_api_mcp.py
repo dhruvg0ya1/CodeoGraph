@@ -48,6 +48,13 @@ def test_agent_counts_a_named_source_as_cited(indexed):
     assert named and named[0]["symbol_name"] == "charge_card" and named[0]["cited_by"] == "name"
 
 
+def test_offline_forces_extractive(indexed):
+    llm.set_model(FakeListChatModel(responses=['{"relevant": [0]}', "written [1]"]))
+    with llm.offline():
+        r = agent.ask("how are card charges retried?", "mini")
+    assert "No LLM is configured" in r["answer"]
+
+
 def test_agent_rewrites_when_nothing_is_relevant(indexed):
     llm.set_model(FakeListChatModel(responses=[
         '{"relevant": []}',                    # grade: nothing useful
