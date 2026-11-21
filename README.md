@@ -52,7 +52,7 @@ _The evals workflow writes the table here._
 <!-- ANSWER_EVAL:END -->
 
 What the benchmark changed: the generic MS MARCO cross-encoder, which usually helps prose search, made code search
-worse here (Recall@5 0.93 -> 0.80) and cost ~2.5 s a query on CPU, so reranking is off by default; and plain
+worse here (added to RRF it took Recall@5 from 0.90 to 0.80) and cost over a second a query on CPU, so reranking is off by default; and plain
 score-weighted fusion edged out Reciprocal Rank Fusion on MRR, so it is the default. How these are measured is in
 [Evaluation](#evaluation).
 
