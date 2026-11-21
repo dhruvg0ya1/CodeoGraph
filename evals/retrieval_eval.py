@@ -32,12 +32,15 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(ROOT))
 
+DEFAULT = "Hybrid, weighted 0.6 dense / 0.4 BM25 (default)"
 CONFIGS = {
     "BM25 only": dict(mode="bm25", rerank=False),
     "Dense only": dict(mode="dense", rerank=False),
-    "Hybrid, weighted 0.6/0.4 (v1)": dict(mode="hybrid", fusion="weighted", rerank=False),
+    "Hybrid, weighted 0.5 / 0.5": dict(mode="hybrid", fusion="weighted", weight=0.5, rerank=False),
+    DEFAULT: dict(mode="hybrid", fusion="weighted", weight=0.6, rerank=False),
+    "Hybrid, weighted 0.7 / 0.3": dict(mode="hybrid", fusion="weighted", weight=0.7, rerank=False),
     "Hybrid, RRF": dict(mode="hybrid", fusion="rrf", rerank=False),
-    "Hybrid, RRF + cross-encoder rerank": dict(mode="hybrid", fusion="rrf", rerank=True),
+    "Hybrid, RRF + MS MARCO cross-encoder": dict(mode="hybrid", fusion="rrf", rerank=True),
 }
 
 
@@ -77,7 +80,8 @@ def run(models: list[str], dataset: Path, url: str, ref: str, cache: Path) -> li
         missing = sorted({t for q in data for t in q["targets"]} - names)
         if missing:
             raise SystemExit(f"dataset targets not in the index (fix the dataset): {missing}")
-        search.search(idx, "warm up", k=5)                 # load models before timing
+        os.environ.setdefault("CODEOGRAPH_RERANK_MODEL", "Xenova/ms-marco-MiniLM-L-6-v2")   # for the rerank row
+        search.search(idx, "warm up", k=5, rerank=True)    # load models before timing
         for label, cfg in CONFIGS.items():
             rows, lat = [], []
             for q in data:
@@ -156,7 +160,7 @@ def main() -> None:
             f.write("## Retrieval eval\n\n" + md + "\n")
     if a.write_readme:
         write_readme(md)
-    default = next(r for r in results if r["config"] == "Hybrid, RRF + cross-encoder rerank")
+    default = next(r for r in results if r["config"] == DEFAULT)
     if default["recall@5"] < a.min_recall5:
         raise SystemExit(f"Recall@5 {default['recall@5']} is below the gate {a.min_recall5}")
 

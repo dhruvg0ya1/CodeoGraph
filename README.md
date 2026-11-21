@@ -13,8 +13,9 @@ what; and answers only from code it can point to by file and line.
 - **AST chunks** - Tree-sitter splits Python, JavaScript and TypeScript into functions, methods (`Session.send`) and
   classes, with signatures and docstrings. Every other language is indexed in overlapping line windows.
 - **Hybrid search** - BM25 over identifier-aware tokens (`getUserById` -> get, user, by, id) plus dense vectors,
-  fused with Reciprocal Rank Fusion and re-ranked by a cross-encoder. Embeddings run locally (FastEmbed / ONNX):
-  **no API key and no per-call cost** to index or search.
+  fused by score (Reciprocal Rank Fusion and cross-encoder reranking are options). The defaults were picked by the
+  benchmark below, not by habit. Embeddings run locally (FastEmbed / ONNX): **no API key and no per-call cost** to
+  index or search.
 - **Dependency graph** - imports resolved to files (absolute and relative), calls resolved through imports, `self`
   and typed variables. "What breaks if I change X" is a reverse walk with hop distance and a risk rating.
 - **A LangGraph agent** - classifies the question, retrieves, grades what it found, rewrites the query when nothing
@@ -25,7 +26,7 @@ what; and answers only from code it can point to by file and line.
 - **PR review** - a diff is mapped onto the index by exact line overlap, so the review knows which functions changed
   and which code outside the diff depends on them.
 - **Measured, in CI** - a retrieval benchmark gates every change to the code; the agent's answers are scored with
-  RAGAS.
+  RAGAS every week.
 - **Incremental** - unchanged commits are skipped and unchanged functions keep their vectors on re-index.
 
 ## Results
@@ -40,7 +41,10 @@ _The evals workflow writes the table here._
 _The evals workflow writes the table here._
 <!-- ANSWER_EVAL:END -->
 
-How these are measured is in [Evaluation](#evaluation).
+What the benchmark changed: the generic MS MARCO cross-encoder, which usually helps prose search, made code search
+worse here (Recall@5 0.93 -> 0.80) and cost ~2.5 s a query on CPU, so reranking is off by default; and plain
+score-weighted fusion edged out Reciprocal Rank Fusion on MRR, so it is the default. How these are measured is in
+[Evaluation](#evaluation).
 
 ## Quick start
 
@@ -61,7 +65,6 @@ Indexing and search need nothing else. Answers and LLM-written reviews need one 
 |---|---|---|
 | `gemini` | `GOOGLE_API_KEY` | free tier works; `GEMINI_MODEL` (default `gemini-2.5-flash`); `pip install "codeograph[gemini]"` |
 | `openai` | `OPENAI_BASE_URL`, `OPENAI_API_KEY` | OpenAI or any OpenAI-compatible server: vLLM, Ollama, LM Studio, OpenRouter, Groq; `OPENAI_MODEL` |
-| `github` | `GITHUB_TOKEN` | GitHub Models free tier; `GITHUB_MODEL` (default `openai/gpt-4.1-mini`) |
 | `auto` (default) | - | Gemini if `GOOGLE_API_KEY`, else OpenAI-compatible if set, else no LLM |
 
 With no LLM, the agent still runs and answers extractively: the best matching functions with their locations.
@@ -117,7 +120,7 @@ flowchart LR
     C --> F[(index on disk<br/>or Qdrant)]
     D --> F
     E --> F
-    F --> G[hybrid search<br/>RRF + cross-encoder]
+    F --> G[hybrid search<br/>weighted fusion]
     G --> H[LangGraph agent]
     F --> I[impact / review / diagram]
     H --> J[CLI / API / UI / MCP]
@@ -156,12 +159,13 @@ to drop the Authorization header on a redirect to another host?") without naming
 configuration is scored on the same index (Recall@1/5/10, MRR@10, nDCG@10, latency); the default pipeline's
 Recall@5 is a CI gate, so a change that makes search worse fails the build.
 
-`evals/answer_eval.py` - runs the agent on 12 of those questions with an LLM from GitHub Models (the workflow's own
-token, no paid key) and scores each answer: does it cite the expected function, does every answer carry a valid
-citation, how many citations the verify step removed, plus RAGAS faithfulness and context precision.
+`evals/answer_eval.py` - runs the agent on 10 of those questions and scores each answer: does it cite the expected
+function, does every answer carry a valid citation, how many citations the verify step removed, plus RAGAS
+faithfulness and context precision. In CI the model is Qwen2.5 3B running on the runner's CPU through Ollama's
+OpenAI-compatible endpoint (no key, no cost) - or Gemini when the repository has a `GOOGLE_API_KEY` secret.
 
-Both run in [`evals.yml`](.github/workflows/evals.yml) on every change to the code and weekly, and write the
-tables above. The unit and integration tests (`pytest`) run on every push on Python 3.11 and 3.12 with a
+The retrieval eval runs in [`evals.yml`](.github/workflows/evals.yml) on every change to the code, the answer eval
+weekly and on demand; both write the tables above. The unit and integration tests (`pytest`) run on every push on Python 3.11 and 3.12 with a
 download-free hash embedder and fake chat models, so they need no network or keys.
 
 ## Configuration
@@ -170,9 +174,10 @@ download-free hash embedder and fake chat models, so they need no network or key
 |---|---|---|
 | `CODEOGRAPH_HOME` | `~/.codeograph` | indexes and downloaded models |
 | `CODEOGRAPH_EMBED_MODEL` | `BAAI/bge-small-en-v1.5` | any FastEmbed text model, e.g. `jinaai/jina-embeddings-v2-base-code` |
-| `CODEOGRAPH_RERANK_MODEL` | `Xenova/ms-marco-MiniLM-L-6-v2` | `none` switches reranking off |
-| `CODEOGRAPH_FUSION` | `rrf` | or `weighted` (0.6 dense / 0.4 BM25, the v1 behaviour) |
-| `CODEOGRAPH_LLM` | `auto` | `gemini`, `openai`, `github`, `none` |
+| `CODEOGRAPH_FUSION` | `weighted` | or `rrf` (Reciprocal Rank Fusion) |
+| `CODEOGRAPH_DENSE_WEIGHT` | `0.6` | dense share of the weighted score (BM25 gets the rest) |
+| `CODEOGRAPH_RERANK_MODEL` | `none` | a FastEmbed cross-encoder, e.g. `Xenova/ms-marco-MiniLM-L-6-v2` (see Results) |
+| `CODEOGRAPH_LLM` | `auto` | `gemini`, `openai`, `none` |
 | `QDRANT_URL` / `QDRANT_API_KEY` | - | store vectors in Qdrant instead of the index folder |
 
 ## Project layout
@@ -191,6 +196,6 @@ tests/        unit and integration tests on a small mixed-language fixture repo
   variables are not followed, so impact analysis can miss dependents (it does not invent them).
 - Symbol extraction covers Python, JavaScript and TypeScript; other languages are searched as line windows and
   have no call graph.
-- In the answer eval, the judge is the same model that writes the answers.
+- In the answer eval, the judge is the same model that writes the answers, and in CI that is a small 3B model.
 
 The [v1 demo video](https://www.youtube.com/watch?v=HWVfFtDU9rg) shows the original interface.

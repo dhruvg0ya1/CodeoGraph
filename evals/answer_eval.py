@@ -7,10 +7,11 @@ Runs the LangGraph agent on questions from the retrieval set and scores every an
   RAGAS           faithfulness (claims supported by the cited code) and context precision (were the cited
                   sources useful), judged by an LLM
 
-Needs an LLM. In CI it uses GitHub Models through the workflow's own token (CODEOGRAPH_LLM=github), so it runs
-with no paid key; locally any provider in codeograph/llm.py works.
+Needs an LLM. In CI it runs an open model on the runner's CPU through Ollama's OpenAI-compatible endpoint (no key,
+no cost), or Gemini when the repository has a GOOGLE_API_KEY secret; locally any provider in codeograph/llm.py works.
 
-    CODEOGRAPH_LLM=github GITHUB_TOKEN=... python evals/answer_eval.py --n 12
+    CODEOGRAPH_LLM=openai OPENAI_BASE_URL=http://localhost:11434/v1 OPENAI_MODEL=qwen2.5:3b \
+        python evals/answer_eval.py --n 10 --ragas-n 5
 """
 
 from __future__ import annotations
@@ -42,12 +43,13 @@ def main() -> None:
     ap.add_argument("--ref", default="v2.32.3")
     ap.add_argument("--cache", default=str(Path(tempfile.gettempdir()) / "codeograph-evals"))
     ap.add_argument("--no-ragas", action="store_true")
+    ap.add_argument("--ragas-n", type=int, default=0, help="score only the first N answers with RAGAS (0 = all)")
     ap.add_argument("--write-readme", action="store_true")
     a = ap.parse_args()
 
     model = llm.get_model()
     if model is None:
-        raise SystemExit("answer_eval needs an LLM - set CODEOGRAPH_LLM (github, gemini or openai).")
+        raise SystemExit("answer_eval needs an LLM - set CODEOGRAPH_LLM (gemini or openai).")
     Path(a.cache).mkdir(parents=True, exist_ok=True)
     repo = checkout(a.repo, a.ref, Path(a.cache))
     ns = "eval-answers-requests"
@@ -62,7 +64,7 @@ def main() -> None:
         secs = time.perf_counter() - t
         cited = [f"{c['file_path']}::{c['symbol_name']}" for c in r["citations"] if c.get("cited")]
         contexts = []
-        for c in r["citations"][:4]:
+        for c in r["citations"][:3]:
             ch = next((x for x in idx.chunks if x.file_path == c["file_path"] and x.qualified_name == c["symbol_name"]),
                       None)
             if ch:
@@ -87,7 +89,7 @@ def main() -> None:
         from ragas.llms import LangchainLLMWrapper
         from ragas.metrics import Faithfulness, LLMContextPrecisionWithoutReference
 
-        res = evaluate(EvaluationDataset.from_list(samples),
+        res = evaluate(EvaluationDataset.from_list(samples[: a.ragas_n or None]),
                        metrics=[Faithfulness(), LLMContextPrecisionWithoutReference()],
                        llm=LangchainLLMWrapper(model),
                        run_config=RunConfig(max_workers=2, max_retries=8, max_wait=90, timeout=180),
@@ -113,7 +115,8 @@ def main() -> None:
              if summary.get("ragas_context_precision") is not None else "")
           + f"| Median time per answer | {summary['p50_seconds']} s |\n\n"
           f"{n} questions from the retrieval set, answered by the agent with `{summary['model']}`, which also "
-          f"judges the RAGAS metrics. Reproduce: `python evals/answer_eval.py`.")
+          f"judges the RAGAS metrics ({summary.get('ragas_faithfulness_scored', 0)} answers scored). "
+          f"Reproduce: `python evals/answer_eval.py`.")
     (out / "answers.md").write_text(md + "\n")
     print("\n" + md)
     if os.environ.get("GITHUB_STEP_SUMMARY"):

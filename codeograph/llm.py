@@ -3,7 +3,6 @@
     CODEOGRAPH_LLM=gemini   GOOGLE_API_KEY (free tier works)            model GEMINI_MODEL
     CODEOGRAPH_LLM=openai   OPENAI_BASE_URL + OPENAI_API_KEY            model OPENAI_MODEL
                             -> OpenAI, or any OpenAI-compatible server: vLLM, Ollama, LM Studio, OpenRouter, Groq
-    CODEOGRAPH_LLM=github   GITHUB_TOKEN (GitHub Models, free tier)     model GITHUB_MODEL
     CODEOGRAPH_LLM=none     no model: search, symbols, impact, diagrams and MCP still work; answers are extractive
     CODEOGRAPH_LLM=auto     (default) gemini if GOOGLE_API_KEY, else openai if OPENAI_API_KEY/OPENAI_BASE_URL, else none
 """
@@ -49,10 +48,10 @@ def _build(name: str, model: str, base_url: str | None) -> BaseChatModel | None:
 
         key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
         return ChatGoogleGenerativeAI(model=model, google_api_key=key, temperature=0)
-    if name in ("openai", "github"):
+    if name == "openai":
         from langchain_openai import ChatOpenAI
 
-        key = os.environ.get("GITHUB_TOKEN") if name == "github" else os.environ.get("OPENAI_API_KEY", "not-needed")
+        key = os.environ.get("OPENAI_API_KEY", "not-needed")
         return ChatOpenAI(model=model, base_url=base_url, api_key=key or "not-needed", temperature=0,
                           max_retries=4, timeout=120)
     return None
@@ -67,8 +66,6 @@ def get_model() -> BaseChatModel | None:
         return _build("gemini", s.gemini_model, None)
     if name == "openai":
         return _build("openai", s.openai_model, s.openai_base_url)
-    if name == "github":
-        return _build("github", s.github_model, "https://models.github.ai/inference")
     return None
 
 

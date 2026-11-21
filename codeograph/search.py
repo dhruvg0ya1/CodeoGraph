@@ -4,7 +4,8 @@
             +-- dense (bge-small, cosine) ----------------------------------+-- fusion (RRF or weighted)
                                                                                  -> cross-encoder rerank
                                                                                  -> exact-symbol boost
-Which fusion and whether to rerank were chosen by evals/retrieval_eval.py, not by taste (README has the table).
+Which fusion and whether to rerank were chosen by evals/retrieval_eval.py, not by taste (README has the table):
+weighted fusion is the default, and the generic MS MARCO reranker is opt-in because it made code search worse.
 """
 
 from __future__ import annotations
@@ -106,7 +107,8 @@ def _weighted(dense: list[tuple[int, float]], sparse: list[tuple[int, float]], w
 
 
 def search(index: store.RepoIndex, query: str, k: int = 8, *, mode: str = "hybrid", fusion: str | None = None,
-           rerank: bool | None = None, file: str | None = None, kind: str | None = None) -> list[Hit]:
+           rerank: bool | None = None, weight: float | None = None, file: str | None = None,
+           kind: str | None = None) -> list[Hit]:
     """mode: hybrid | bm25 | dense. Filters `file` (exact repo path) and `kind` (function, method, class ...)."""
     settings = get_settings()
     fusion = fusion or settings.fusion
@@ -124,7 +126,8 @@ def search(index: store.RepoIndex, query: str, k: int = 8, *, mode: str = "hybri
     elif mode == "dense":
         scored = dict(dense)
     else:
-        scored = _rrf([dense, sparse]) if fusion == "rrf" else _weighted(dense, sparse)
+        w = settings.dense_weight if weight is None else weight
+        scored = _rrf([dense, sparse]) if fusion == "rrf" else _weighted(dense, sparse, w)
     ranked = sorted(scored.items(), key=lambda x: -x[1])[: n]
     r_sparse = {i: r for r, (i, _) in enumerate(sparse)}
     r_dense = {i: r for r, (i, _) in enumerate(dense)}
