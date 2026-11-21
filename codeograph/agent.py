@@ -102,8 +102,10 @@ def retrieve(state: State) -> dict:
         wanted = set(rep.get("matched", [])[:2]) | {a["node"] for a in rep.get("affected", [])[:5]}
         hits = [search.Hit(c, 1.0) for c in idx.chunks if f"{c.file_path}::{c.qualified_name}" in wanted]
     seen = {h.chunk.id for h in hits}
+    about_tests = bool(re.search(r"\btest", state["question"], re.I))
     for h in search.search(idx, state.get("query") or state["question"], k=TOP_K,
-                           file=state.get("filter_file") or None, kind=state.get("filter_kind") or None):
+                           file=state.get("filter_file") or None, kind=state.get("filter_kind") or None,
+                           skip_tests=not about_tests):
         if h.chunk.id not in seen and len(hits) < TOP_K:
             hits.append(h)
             seen.add(h.chunk.id)

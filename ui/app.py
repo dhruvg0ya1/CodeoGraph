@@ -1,879 +1,600 @@
-"""
-ui/app.py - CodeoGraph's Streamlit UI.
+"""CodeoGraph - the web app.
 
-    codeograph serve            # the API, in one terminal
-    streamlit run ui/app.py     # this UI, in another
+    streamlit run ui/app.py
 
-Architecture notes:
-- All API calls go to the FastAPI backend at BACKEND_URL (default localhost:8000)
-- st.session_state holds: active_namespace, messages, repos list
-- Chat responses stream via requests.get with stream=True, parsed line by line
-- The special <!--SOURCES:...--> trailer is stripped and rendered as an expander
+Talks to the codeograph package directly (no separate server). Indexing runs in a background thread with live
+progress; the demo repositories index themselves on the first visit.
 """
 
-import os
+from __future__ import annotations
+
+import html
 import json
-import time
-from typing import Optional
+import os
+import re
+import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
-import requests
 import streamlit as st
 
-# ---------------------------------------------------------------------------
-# Config
-# ---------------------------------------------------------------------------
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:                      # run from a checkout without `pip install -e .`
+    sys.path.insert(0, str(ROOT))
 
-BACKEND_URL = os.getenv("BACKEND_URL", "")      # empty: run the API inside this process (one command, no server)
+from codeograph import agent, impact, indexer, llm, review, search, store  # noqa: E402
 
-st.set_page_config(
-    page_title="CodeoGraph",
-    page_icon="🤖",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+st.set_page_config(page_title="CodeoGraph - cited answers over any codebase", page_icon="🤖", layout="wide",
+                   initial_sidebar_state="expanded")
 
+DEMOS = {"psf/requests": "https://github.com/psf/requests",
+         "pallets/click": "https://github.com/pallets/click",
+         "CodeoGraph": "https://github.com/dhruvg0ya1/CodeoGraph"}
+AUTO_DEMOS = [] if os.environ.get("CODEOGRAPH_NO_DEMOS") else ["https://github.com/psf/requests",
+                                                                 "https://github.com/dhruvg0ya1/CodeoGraph"]
+REPO = "https://github.com/dhruvg0ya1/CodeoGraph"
 
-@st.cache_resource(show_spinner="Starting CodeoGraph...")
-def _embedded_backend() -> str:
-    """With no BACKEND_URL, serve codeograph.api on a free local port in a background thread, so
-    `streamlit run ui/app.py` (or Streamlit Community Cloud) is the whole app."""
-    import socket
-    import threading
+# --------------------------------------------------------------------------- style
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+* { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important; }
+code, pre, .stCode code, .cg-mono, .cg-card .m { font-family: 'JetBrains Mono', monospace !important; }
+*, *::before, *::after { border-radius: 0px !important; }
+[data-testid="stIconMaterial"], .material-symbols-rounded, [class*="material-symbols"] {
+  font-family: 'Material Symbols Rounded' !important; }
+#MainMenu, footer, header { display: none !important; }
 
-    import uvicorn
+/* layout */
+.stApp { background: #0d1b1b; }
+.block-container { padding: 2rem 3rem !important; max-width: 1320px; }
+[data-testid="stSidebar"] { background: #0a1a1a; border-right: 1px solid #0d7377; }
+[data-testid="stSidebar"] * { color: #b0e0e0; }
+[data-testid="stSidebar"] label { color: #14a098 !important; font-weight: 600; letter-spacing: 0.3px; }
 
-    from codeograph.api import app as api_app
+/* type */
+h1, h2, h3, h4, h5, h6 { color: #14f0f0 !important; font-weight: 700 !important; letter-spacing: -0.5px; }
+h1 { font-size: 2rem !important; }
+p, li, .stMarkdown { color: #c8e8e8; }
+.stMarkdown strong { color: #14f0f0; }
+a { color: #14a098 !important; } a:hover { color: #14f0f0 !important; }
+hr { border-color: #0d7377 !important; opacity: 0.4; }
+[data-testid="stCaptionContainer"], .stCaption { color: #5a9a9a !important; letter-spacing: 0.3px; }
 
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
-    server = uvicorn.Server(uvicorn.Config(api_app, host="127.0.0.1", port=port, log_level="warning"))
-    threading.Thread(target=server.run, daemon=True).start()
-    for _ in range(200):
-        if server.started:
-            break
-        time.sleep(0.05)
-    return f"http://127.0.0.1:{port}"
+/* inputs */
+.stTextInput input, .stTextArea textarea, div[data-baseweb="select"] > div {
+  background: #0a1a1a !important; border: 1px solid #0d7377 !important; color: #e0f7f7 !important;
+  box-shadow: none !important; caret-color: #14f0f0; }
+.stTextInput input:focus, .stTextArea textarea:focus { border-color: #14f0f0 !important; box-shadow: 0 0 0 1px #14f0f0 !important; }
+.stTextInput input::placeholder, .stTextArea textarea::placeholder, [data-testid="stChatInput"] textarea::placeholder { color: #4a8a8a !important; }
+[data-testid="stChatInput"] { border: 1px solid #0d7377 !important; background: #0a1a1a !important; }
+[data-testid="stChatInput"]:focus-within { border-color: #14f0f0 !important; box-shadow: 0 0 0 1px #14f0f0; }
 
+/* buttons */
+.stButton > button, .stDownloadButton > button {
+  background: transparent; color: #14a098; border: 1px solid #0d7377; font-weight: 600; font-size: 12px;
+  letter-spacing: 0.6px; text-transform: uppercase; padding: 6px 18px; transition: all .15s ease; }
+.stButton > button:hover, .stDownloadButton > button:hover { background: #0d7377; color: #e0f7f7; border-color: #14a098; }
+.stButton > button[kind="primary"] { background: #14f0f0; color: #0a1a1a !important; border: 1px solid #14f0f0; font-weight: 700; }
+.stButton > button[kind="primary"] p { color: #0a1a1a !important; }
+.stButton > button[kind="primary"]:hover { background: #14a098; border-color: #14a098; }
+.stButton > button:disabled { background: transparent !important; color: #2f5f5f !important; border-color: #123a3a !important; }
 
-if not BACKEND_URL:
-    BACKEND_URL = _embedded_backend()
+/* pills + segmented control */
+[data-testid="stButtonGroup"] button { background: #0a1a1a !important; border: 1px solid #0d7377 !important;
+  color: #b0e0e0 !important; font-size: 13px; }
+[data-testid="stButtonGroup"] button:hover { border-color: #14a098 !important; color: #e0f7f7 !important; }
+[data-testid="stButtonGroup"] button[aria-checked="true"], [data-testid="stButtonGroup"] button[kind*="Active"] {
+  background: #0d7377 !important; color: #ffffff !important; border-color: #14f0f0 !important; }
 
-# ---------------------------------------------------------------------------
-# Custom CSS — dark, minimal, production-looking
-# ---------------------------------------------------------------------------
+/* tabs */
+.stTabs [data-baseweb="tab-list"] { border-bottom: 1px solid #0d7377; gap: 0; }
+.stTabs [data-baseweb="tab"] { color: #5a9a9a !important; font-weight: 600; font-size: 13px; letter-spacing: 0.6px;
+  text-transform: uppercase; padding: 10px 22px; }
+.stTabs [data-baseweb="tab"] p { color: inherit !important; text-transform: uppercase; letter-spacing: 0.6px;
+  font-weight: 600; font-size: 13px; }
+[data-testid="stChatInput"] textarea { background: transparent !important; border: none !important; color: #e0f7f7 !important; }
+[data-testid="stSidebar"] a { font-size: 0.8rem; }
+.stTabs [data-baseweb="tab"][aria-selected="true"] { color: #14f0f0 !important; }
+.stTabs [data-baseweb="tab-highlight"] { background: #14f0f0 !important; }
+.stTabs [data-baseweb="tab"]:hover { color: #14a098 !important; }
+.stTabs [data-baseweb="tab-panel"] { padding-top: 22px; }
 
-st.markdown(
-    """
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+/* chat, expanders, alerts, code, progress */
+[data-testid="stChatMessage"] { background: #0f1f1f; border: 1px solid #0d7377; padding: 16px 20px; margin-bottom: 6px; }
+[data-testid="stChatMessage"]:hover { border-color: #14a098; }
+[data-testid="stChatMessageAvatarUser"], [data-testid="stChatMessageAvatarAssistant"] { background: #0d7377 !important; }
+[data-testid="stChatMessageAvatarUser"] svg, [data-testid="stChatMessageAvatarAssistant"] svg { fill: #e0f7f7 !important;
+  color: #e0f7f7 !important; }
+[data-testid="stExpander"] { background: #0f1f1f; border: 1px solid #0d7377; }
+[data-testid="stExpander"]:hover { border-color: #14a098; }
+[data-testid="stExpander"] summary { color: #14a098 !important; font-weight: 600; }
+[data-testid="stExpander"] summary:hover { color: #14f0f0 !important; }
+div[data-testid="stAlert"] { border: 1px solid #0d7377 !important; background: #0f1f1f !important; }
+div[data-testid="stAlert"] p { color: #c8e8e8 !important; }
+.stCode { border: 1px solid #0d7377; background: #0a1a1a; }
+.stProgress > div > div > div { background: #0a1a1a; }
+.stProgress > div > div > div > div { background: #14f0f0; }
+[data-testid="stDataFrame"] { border: 1px solid #0d7377; }
+::-webkit-scrollbar { width: 6px; height: 6px; } ::-webkit-scrollbar-track { background: #0a1a1a; }
+::-webkit-scrollbar-thumb { background: #0d7377; } ::-webkit-scrollbar-thumb:hover { background: #14a098; }
 
-    * { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important; }
-    *, *::before, *::after { border-radius: 0px !important; }
-
-    /* Hide Streamlit branding */
-    #MainMenu, footer, header { display: none !important; }
-
-    /* Sidebar */
-    [data-testid="stSidebar"] {
-        background: #0a1a1a;
-        border-right: 1px solid #0d7377;
-    }
-    [data-testid="stSidebar"] * { color: #b0e0e0 !important; }
-    [data-testid="stSidebar"] .stSelectbox label { color: #14a098 !important; font-weight: 600; letter-spacing: 0.3px; }
-
-    /* Main area */
-    .stApp { background: #0d1b1b; }
-    .stApp > header { background: #0a1a1a !important; }
-    .stApp > header [data-testid="stDecoration"] { background: #0a1a1a; }
-    .block-container { padding: 2rem 3rem !important; }
-
-    /* Typography */
-    h1, h2, h3, h4, h5, h6 { color: #14f0f0 !important; font-weight: 700 !important; letter-spacing: -0.5px; }
-    h1 { font-size: 2rem !important; }
-    p, li, .stMarkdown { color: #c8e8e8; }
-    .stMarkdown strong { color: #14f0f0; }
-
-    /* Dividers */
-    hr { border-color: #0d7377 !important; opacity: 0.4; }
-
-    /* Chat messages */
-    [data-testid="stChatMessage"] {
-        background: #0f1f1f;
-        border: 1px solid #0d7377;
-        margin-bottom: 4px;
-        padding: 16px 20px;
-    }
-    [data-testid="stChatMessage"]:hover { border-color: #14a098; }
-    [data-testid="stChatMessage"] [data-testid="stChatMessageContent"] { color: #c8e8e8; }
-    [data-testid="stChatMessage"] [data-testid="stChatMessageAvatar"] { background: #0d7377 !important; }
-    [data-testid="stChatMessage"] [data-testid="stChatMessageAvatar"] svg { fill: #e0f7f7; }
-    [data-testid="stChatMessage"][aria-label="user"] { background: #0d7377; }
-    [data-testid="stChatMessage"][aria-label="user"] [data-testid="stChatMessageContent"] { color: #ffffff; }
-
-    /* Inputs */
-    .stTextInput > div > div > input,
-    .stTextArea textarea,
-    .stSelectbox > div > div > div,
-    .stSelectbox > div > div {
-        background: #0a1a1a !important;
-        border: 1px solid #0d7377 !important;
-        color: #e0f7f7 !important;
-        box-shadow: none !important;
-        caret-color: #14f0f0;
-    }
-    .stTextInput > div > div > input:focus,
-    .stTextArea textarea:focus {
-        border-color: #14f0f0 !important;
-        box-shadow: 0 0 0 1px #14f0f0 !important;
-    }
-    .stTextInput > div > div > input::placeholder,
-    .stTextArea textarea::placeholder { color: #4a8a8a !important; }
-
-    /* Selectbox */
-    .stSelectbox > div > div { border: 1px solid #0d7377 !important; }
-    div[data-baseweb="select"] > div { background: #0a1a1a !important; border: 1px solid #0d7377 !important; }
-    div[data-baseweb="select"] > div > div { color: #e0f7f7 !important; }
-
-    /* Buttons */
-    .stButton > button {
-        background: #0d7377;
-        color: #e0f7f7;
-        border: 1px solid #14a098;
-        font-weight: 600;
-        font-size: 13px;
-        letter-spacing: 0.5px;
-        text-transform: uppercase;
-        transition: all 0.15s ease;
-        padding: 6px 20px;
-    }
-    .stButton > button:hover {
-        background: #14a098;
-        border-color: #14f0f0;
-        color: #ffffff;
-    }
-    .stButton > button:active {
-        background: #0d7377;
-        border-color: #14f0f0;
-    }
-    .stButton > button[kind="secondary"] {
-        background: transparent;
-        border: 1px solid #0d7377;
-        color: #14a098;
-    }
-    .stButton > button[kind="secondary"]:hover {
-        background: #0d7377;
-        color: #e0f7f7;
-    }
-
-    /* Form submit button */
-    .stForm [data-testid="stForm"] button {
-        background: #14f0f0;
-        color: #0a1a1a;
-        border: none;
-        font-weight: 700;
-        font-size: 14px;
-        letter-spacing: 0.5px;
-    }
-    .stForm [data-testid="stForm"] button:hover {
-        background: #0d7377;
-        color: #e0f7f7;
-    }
-
-    /* Risk badges */
-    .badge-high   { background:#e0115f; color:white; padding:4px 14px; font-weight:700; font-size:11px; letter-spacing:0.5px; text-transform:uppercase; display:inline-block; }
-    .badge-medium { background:#14a098; color:white; padding:4px 14px; font-weight:700; font-size:11px; letter-spacing:0.5px; text-transform:uppercase; display:inline-block; }
-    .badge-low    { background:#0d7377; color:white; padding:4px 14px; font-weight:700; font-size:11px; letter-spacing:0.5px; text-transform:uppercase; display:inline-block; }
-
-    /* Stat cards */
-    .stat-card {
-        background: #0f1f1f;
-        border: 1px solid #0d7377;
-        padding: 16px 18px;
-        text-align: center;
-    }
-    .stat-card:hover { border-color: #14a098; }
-    .stat-card .value { font-size: 32px; font-weight: 800; color: #14f0f0; letter-spacing: -1px; }
-    .stat-card .label { font-size: 11px; color: #5a9a9a; margin-top: 4px; letter-spacing: 1px; text-transform: uppercase; font-weight: 600; }
-
-    /* Progress bar */
-    .stProgress > div { background: #0a1a1a; }
-    .stProgress > div > div { background: #14f0f0; }
-
-    /* Expander */
-    [data-testid="stExpander"] {
-        background: #0f1f1f;
-        border: 1px solid #0d7377;
-    }
-    [data-testid="stExpander"]:hover { border-color: #14a098; }
-    [data-testid="stExpander"] summary { color: #14a098 !important; font-weight: 600; letter-spacing: 0.3px; }
-    [data-testid="stExpander"] summary:hover { color: #14f0f0 !important; }
-
-    /* Tabs */
-    .stTabs [data-baseweb="tab-list"] { border-bottom: 1px solid #0d7377; gap: 0; }
-    .stTabs [data-baseweb="tab"] {
-        color: #5a9a9a !important;
-        font-weight: 600;
-        font-size: 13px;
-        letter-spacing: 0.5px;
-        text-transform: uppercase;
-        padding: 8px 20px;
-        border-bottom: 2px solid transparent;
-    }
-    .stTabs [data-baseweb="tab"][aria-selected="true"] {
-        color: #14f0f0 !important;
-        border-bottom: 2px solid #14f0f0;
-    }
-    .stTabs [data-baseweb="tab"]:hover { color: #14a098 !important; }
-    .stTabs [data-baseweb="tab-panel"] { padding-top: 20px; }
-
-    /* Info / Success / Warning / Error boxes */
-    .stAlert { border: 1px solid !important; }
-    div[data-testid="stAlert"] {
-        border: 1px solid #0d7377 !important;
-        background: #0f1f1f !important;
-    }
-    .stAlert p, .stAlert span { color: #c8e8e8 !important; }
-    .stInfo { border-color: #14a098 !important; }
-    .stSuccess { border-color: #14f0f0 !important; }
-    .stWarning { border-color: #e0115f !important; }
-    .stError { border-color: #ff0040 !important; }
-
-    /* Spinner */
-    .stSpinner > div { border-color: #14f0f0 transparent transparent transparent !important; }
-
-    /* Download button */
-    .stDownloadButton > button {
-        background: transparent;
-        border: 1px solid #14a098;
-        color: #14a098;
-        font-weight: 600;
-        font-size: 12px;
-        letter-spacing: 0.5px;
-        text-transform: uppercase;
-    }
-    .stDownloadButton > button:hover {
-        background: #0d7377;
-        color: #e0f7f7;
-    }
-
-    /* Chat input */
-    .stChatInputContainer { border: 1px solid #0d7377; background: #0a1a1a; }
-    .stChatInputContainer:focus-within { border-color: #14f0f0; box-shadow: 0 0 0 1px #14f0f0; }
-    .stChatInputContainer input { color: #e0f7f7 !important; }
-    .stChatInputContainer input::placeholder { color: #4a8a8a !important; }
-
-    /* Sidebar buttons */
-    [data-testid="stSidebar"] .stButton > button {
-        background: transparent;
-        border: 1px solid #0d7377;
-        color: #5a9a9a;
-        text-align: left;
-        padding: 10px 16px;
-        font-weight: 500;
-        letter-spacing: 0.5px;
-        text-transform: uppercase;
-        font-size: 12px;
-    }
-    [data-testid="stSidebar"] .stButton > button:hover {
-        background: #0d7377;
-        border-color: #14a098;
-        color: #e0f7f7;
-    }
-
-    /* Caption */
-    .stCaption { color: #5a9a9a !important; font-size: 11px !important; letter-spacing: 0.3px; }
-
-    /* Columns */
-    [data-testid="column"] { gap: 0; }
-
-    /* Info text in sidebar */
-    [data-testid="stSidebar"] .stInfo,
-    [data-testid="stSidebar"] .stAlert {
-        background: #0f1f1f !important;
-        border-color: #0d7377 !important;
-    }
-
-    /* Code blocks */
-    .stCode { border: 1px solid #0d7377; background: #0a1a1a; }
-    .stCode code { color: #14f0f0; }
-
-    /* Scrollbar */
-    ::-webkit-scrollbar { width: 6px; height: 6px; }
-    ::-webkit-scrollbar-track { background: #0a1a1a; }
-    ::-webkit-scrollbar-thumb { background: #0d7377; }
-    ::-webkit-scrollbar-thumb:hover { background: #14a098; }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-# ---------------------------------------------------------------------------
-# Session state initialization
-# ---------------------------------------------------------------------------
-
-if "active_namespace" not in st.session_state:
-    st.session_state.active_namespace = None
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "repos" not in st.session_state:
-    st.session_state.repos = []
-if "page" not in st.session_state:
-    st.session_state.page = "Index Repo"
-if "pending_reindex_url" not in st.session_state:
-    st.session_state.pending_reindex_url = None
+/* CodeoGraph components */
+.cg-brand { font-size: 1.35rem; font-weight: 800; color: #14f0f0 !important; letter-spacing: -0.3px; }
+.cg-tag { color: #5a9a9a !important; font-size: 0.8rem; margin: 2px 0 14px 0; }
+.cg-sub { color: #5a9a9a; font-size: 0.85rem; margin: -6px 0 16px 0; }
+.stat-card { background: #0f1f1f; border: 1px solid #0d7377; padding: 14px 16px; text-align: center; }
+.stat-card:hover { border-color: #14a098; }
+.stat-card .value { font-size: 28px; font-weight: 800; color: #14f0f0; letter-spacing: -1px; line-height: 1.1; }
+.stat-card .label { font-size: 10.5px; color: #5a9a9a; margin-top: 4px; letter-spacing: 1px; text-transform: uppercase; font-weight: 600; }
+.cg-card { background: #0f1f1f; border: 1px solid #0d7377; padding: 12px 16px; margin-bottom: 6px; }
+.cg-card:hover { border-color: #14a098; }
+.cg-card .t { color: #e0f7f7; font-weight: 600; font-size: 0.98rem; }
+.cg-card .m { color: #5a9a9a; font-size: 0.78rem; margin-top: 2px; }
+.cg-card .d { color: #c8e8e8; font-size: 0.86rem; margin-top: 6px; }
+.cg-badge { display: inline-block; padding: 1px 8px; font-size: 10px; font-weight: 700; letter-spacing: 0.6px;
+  text-transform: uppercase; margin-left: 10px; vertical-align: middle; border: 1px solid #0d7377; color: #14a098; }
+.k-function { background: #0d7377; color: #e0f7f7; border-color: #0d7377; }
+.k-method { background: transparent; color: #14f0f0; border-color: #14f0f0; }
+.k-class { background: #14a098; color: #0a1a1a; border-color: #14a098; }
+.badge-High, .badge-high { background:#e0115f; color:#fff; border-color:#e0115f; }
+.badge-Medium, .badge-medium { background:#14a098; color:#fff; border-color:#14a098; }
+.badge-Low, .badge-low { background:#0d7377; color:#fff; border-color:#0d7377; }
+.cg-bar { height: 3px; background: #0a1a1a; margin-top: 8px; }
+.cg-bar span { display: block; height: 100%; background: #14a098; }
+.cg-note { border-left: 2px solid #14f0f0; padding: 8px 14px; background: #0f1f1f; color: #b0e0e0; font-size: 0.85rem;
+  margin: 2px 0 14px 0; }
+.cg-step { color: #5a9a9a; font-size: 0.8rem; font-family: 'JetBrains Mono', monospace !important; }
+.cg-model { display: inline-block; border: 1px solid #0d7377; padding: 3px 10px; font-size: 11px; letter-spacing: 0.5px;
+  text-transform: uppercase; color: #5a9a9a; }
+</style>
+""", unsafe_allow_html=True)
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def fetch_repos() -> list[dict]:
-    try:
-        r = requests.get(f"{BACKEND_URL}/repos", timeout=5)
-        return r.json() if r.ok else []
-    except Exception:
-        return []
+def esc(s) -> str:
+    return html.escape("" if s is None else str(s))
 
 
-def get_active_repo_info() -> Optional[dict]:
-    ns = st.session_state.active_namespace
-    return next((r for r in st.session_state.repos if r["namespace"] == ns), None)
+TEST_PATH = search.TEST_PATH
 
 
-def risk_badge(level: str) -> str:
-    cls = f"badge-{level.lower()}"
-    return f'<span class="{cls}">{level}</span>'
+# --------------------------------------------------------------------------- indexing jobs
+@st.cache_resource
+def _registry() -> dict:
+    return {"lock": threading.Lock(), "jobs": {}, "pool": ThreadPoolExecutor(max_workers=1), "auto": False}
 
 
-# ---------------------------------------------------------------------------
-# Sidebar
-# ---------------------------------------------------------------------------
+def start_index(url: str, force: bool = False) -> str:
+    reg = _registry()
+    ns = indexer.namespace_for(url)
+    with reg["lock"]:
+        if reg["jobs"].get(ns, {}).get("status") in ("queued", "running"):
+            return ns
+        reg["jobs"][ns] = {"status": "queued", "url": url, "current_file": "Waiting for the indexer...",
+                           "total_files": 0, "processed_files": 0, "total_chunks": 0, "indexed_chunks": 0}
+
+    def run():
+        def cb(**kw):
+            with reg["lock"]:
+                reg["jobs"][ns].update(kw, status="running")
+        try:
+            meta = indexer.index_repository(url, force=force, progress=cb)
+            with reg["lock"]:
+                reg["jobs"][ns].update(status="done", chunk_count=meta.get("chunk_count"))
+        except Exception as e:  # noqa: BLE001 - shown in the UI
+            with reg["lock"]:
+                reg["jobs"][ns].update(status="error", error=str(e)[:300])
+    reg["pool"].submit(run)
+    return ns
+
+
+def active_jobs() -> dict:
+    reg = _registry()
+    with reg["lock"]:
+        return {k: dict(v) for k, v in reg["jobs"].items() if v["status"] in ("queued", "running", "error")}
+
+
+def auto_demos() -> None:
+    reg = _registry()
+    if reg["auto"]:
+        return
+    reg["auto"] = True
+    have = {r["namespace"] for r in store.list_indexes()}
+    for url in AUTO_DEMOS:
+        if indexer.namespace_for(url) not in have:
+            start_index(url)
+
+
+@st.fragment(run_every=1.5)
+def progress_panel() -> None:
+    jobs = active_jobs()
+    if not jobs:
+        if st.session_state.get("_had_jobs"):
+            st.session_state["_had_jobs"] = False
+            st.rerun()
+        return
+    st.session_state["_had_jobs"] = True
+    for ns, j in jobs.items():
+        if j["status"] == "error":
+            st.error(f"Indexing {ns} failed: {j.get('error')}")
+            with _registry()["lock"]:
+                _registry()["jobs"][ns]["status"] = "failed-shown"
+            continue
+        tot = j.get("total_chunks") or 0
+        frac = (j.get("indexed_chunks", 0) / tot) if tot else (
+            (j.get("processed_files", 0) / j["total_files"]) * 0.3 if j.get("total_files") else 0.02)
+        st.progress(min(max(frac, 0.02), 1.0), text=f"Indexing {ns} - {j.get('current_file', '')}"[:120])
+
+
+# --------------------------------------------------------------------------- helpers
+def stats(idx: store.RepoIndex) -> dict:
+    kinds: dict[str, int] = {}
+    for c in idx.chunks:
+        kinds[c.symbol_type] = kinds.get(c.symbol_type, 0) + 1
+    g = idx.meta.get("graph", {})
+    return {"files": idx.meta.get("file_count", 0), "functions": kinds.get("function", 0) + kinds.get("method", 0),
+            "classes": kinds.get("class", 0), "calls": g.get("calls", 0), "imports": g.get("imports", 0),
+            "languages": ", ".join(idx.meta.get("languages", [])), "commit": (idx.meta.get("commit") or "")[:7]}
+
+
+def chunk_of(idx: store.RepoIndex, file_path: str, qual: str):
+    return next((c for c in idx.chunks if c.file_path == file_path and c.qualified_name == qual), None)
+
+
+def lang(c) -> str:
+    return {"tsx": "typescript"}.get(c.language, c.language)
+
+
+def card(title: str, kind: str, meta: str, desc: str = "", score: float | None = None) -> str:
+    bar = (f'<div class="cg-bar"><span style="width:{max(4, min(100, score * 100)):.0f}%"></span></div>'
+           if score is not None else "")
+    return (f'<div class="cg-card"><div class="t">{esc(title)}<span class="cg-badge k-{esc(kind)}">{esc(kind)}</span>'
+            f'</div><div class="m">{esc(meta)}</div>' + (f'<div class="d">{esc(desc)}</div>' if desc else "") +
+            f"{bar}</div>")
+
+
+def metric(col, value, label: str) -> None:
+    col.markdown(f'<div class="stat-card"><div class="value">{esc(value)}</div><div class="label">{esc(label)}</div>'
+                 f'</div>', unsafe_allow_html=True)
+
+
+def suggestions(ns: str) -> list[str]:
+    if "requests" in ns:
+        return ["How does it decide to drop the Authorization header on a redirect?",
+                "Where is the proxy chosen for a URL?", "What breaks if I change `merge_setting`?",
+                "Where is `Session.send` defined?"]
+    if "codeograph" in ns:
+        return ["How does the agent check its citations?", "How are BM25 and dense scores fused?",
+                "What breaks if I change `tokenize`?", "Where is `index_repository` defined?"]
+    if "click" in ns:
+        return ["How are command-line options parsed?", "How does a group dispatch to a subcommand?",
+                "What breaks if I change `Context.invoke`?", "Where is `echo` defined?"]
+    return ["Where does the program start?", "How are errors handled?", "What are the main classes?"]
+
+
+def top_targets(idx: store.RepoIndex, n: int = 8) -> list[str]:
+    g = idx.graph
+    scored = [(sum(1 for _, _, d in g.in_edges(node, data=True) if d.get("type") == "calls"), node)
+              for node in g.nodes if "::" in node]
+    return [node.split("::", 1)[1] for s, node in sorted(scored, reverse=True)[:n] if s > 0]
+
+
+def dq(s: str) -> str:
+    return s.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def show_citations(idx: store.RepoIndex, msg: dict) -> None:
+    cites = [c for c in msg.get("citations", []) if c.get("cited")] or msg.get("citations", [])[:3]
+    for c in cites:
+        ch = chunk_of(idx, c["file_path"], c["symbol_name"])
+        with st.expander(f"[{c['n']}]  {c['symbol_name']}  ·  {c['file_path']}:{c['start_line']}-{c['end_line']}"):
+            if ch:
+                st.code(ch.code, language=lang(ch), line_numbers=True)
+    if msg.get("trace"):
+        with st.expander("How CodeoGraph answered"):
+            for step in msg["trace"]:
+                st.markdown(f'<div class="cg-step">→ {esc(step)}</div>', unsafe_allow_html=True)
+
+
+# --------------------------------------------------------------------------- sidebar
+auto_demos()
+repos = store.list_indexes()
+names = [r["namespace"] for r in repos]
+if st.session_state.get("ns") not in names:
+    st.session_state.ns = names[0] if names else None
 
 with st.sidebar:
-    st.markdown("## 🤖 CodeoGraph")
-    st.markdown("*AI-powered codebase understanding*")
+    st.markdown('<div class="cg-brand">CodeoGraph</div><div class="cg-tag">Cited answers, change impact and PR '
+                'review over any codebase</div>', unsafe_allow_html=True)
+    if names:
+        st.session_state.ns = st.selectbox("Repository", names, index=names.index(st.session_state.ns))
+    with st.expander("Add a repository", expanded=not names):
+        url = st.text_input("Public GitHub URL", placeholder="https://github.com/owner/repo")
+        if st.button("Index it", type="primary", use_container_width=True, disabled=not url.strip()):
+            start_index(url.strip())
+            st.toast(f"Indexing {indexer.namespace_for(url.strip())} - about a minute for a small repo.")
+        st.caption("Or one of these:")
+        for label, demo_url in DEMOS.items():
+            if st.button(label, use_container_width=True, key=f"demo_{label}"):
+                if indexer.namespace_for(demo_url) in names:
+                    st.session_state.ns = indexer.namespace_for(demo_url)
+                    st.rerun()
+                start_index(demo_url)
+    progress_panel()
     st.divider()
+    model = llm.model_label()
+    st.markdown(f'<span class="cg-model">LLM: {esc(model if model != "none" else "none - extractive")}</span>',
+                unsafe_allow_html=True)
+    st.markdown(f"[Source on GitHub]({REPO}) · [How it is measured]({REPO}#evaluation)")
 
-    # Refresh repos list
-    st.session_state.repos = fetch_repos()
-    repo_options = {r["namespace"]: r["repo_url"] for r in st.session_state.repos}
+ns = st.session_state.ns
+idx = store.load(ns) if ns else None
 
-    if repo_options:
-        selected_ns = st.selectbox(
-            "Active Repository",
-            options=list(repo_options.keys()),
-            format_func=lambda ns: repo_options.get(ns, ns),
-            index=(
-                list(repo_options.keys()).index(st.session_state.active_namespace)
-                if st.session_state.active_namespace in repo_options
-                else 0
-            ),
-        )
-        st.session_state.active_namespace = selected_ns
-    else:
-        st.info("No repos indexed yet.")
+# --------------------------------------------------------------------------- empty state
+if idx is None:
+    st.markdown("# CodeoGraph")
+    st.markdown('<div class="cg-sub">Ask any codebase and get answers that cite the code, by file and line.</div>',
+                unsafe_allow_html=True)
+    st.info("The demo repositories are being indexed - progress is in the sidebar, and this page fills in by itself.")
+    st.stop()
 
-    # Active repo stats
-    info = get_active_repo_info()
-    if info:
-        st.markdown("**Repo Stats**")
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown(
-                f'<div class="stat-card"><div class="value">{info["chunk_count"]}</div>'
-                f'<div class="label">Chunks</div></div>',
-                unsafe_allow_html=True,
-            )
-        with col2:
-            st.markdown(
-                f'<div class="stat-card"><div class="value">{info["file_count"]}</div>'
-                f'<div class="label">Files</div></div>',
-                unsafe_allow_html=True,
-            )
-        langs = ", ".join(info.get("languages", [])) or "—"
-        st.caption(f"Languages: {langs}")
+s = stats(idx)
+st.markdown(f"# {ns}")
+st.markdown(f'<div class="cg-sub cg-mono">{esc(idx.meta.get("repo_url", ""))}'
+            f'{"  @ " + esc(s["commit"]) if s["commit"] else ""}  ·  {esc(s["languages"])}</div>',
+            unsafe_allow_html=True)
+cols = st.columns(5)
+for col, (val, label) in zip(cols, [(s["files"], "files"), (s["functions"], "functions & methods"),
+                                    (s["classes"], "classes"), (s["calls"], "call edges"),
+                                    (s["imports"], "import edges")], strict=True):
+    metric(col, val, label)
+st.write("")
 
-    st.divider()
+t_ask, t_search, t_impact, t_review, t_arch, t_bench = st.tabs(
+    ["Ask", "Search", "Impact", "PR review", "Architecture", "Benchmarks"])
 
-    # Navigation
-    pages = ["Index Repo", "Chat", "Change Impact", "PR Review", "Architecture"]
-    for p in pages:
-        if st.button(p, use_container_width=True, key=f"nav_{p}"):
-            st.session_state.page = p
-            st.rerun()
+# --------------------------------------------------------------------------- ask
+with t_ask:
+    if llm.get_model() is None:
+        st.markdown('<div class="cg-note">This demo runs without an LLM key, so answers are <b>extractive</b>: the '
+                    'agent still classifies the question, retrieves, checks and cites - and returns the exact '
+                    'functions that answer you. Run it with <code>GOOGLE_API_KEY</code> or any OpenAI-compatible '
+                    'model for written answers.</div>', unsafe_allow_html=True)
+    chats = st.session_state.setdefault("chats", {})
+    history = chats.setdefault(ns, [])
+    conversation = st.container()                  # created first, so it sits above the input
+    picked = st.pills("Try one", suggestions(ns), key=f"pill_{ns}")
+    typed = st.chat_input(f"Ask anything about {ns}")
+    question = typed
+    if picked and st.session_state.get(f"_last_pill_{ns}") != picked:
+        question = question or picked
+    st.session_state[f"_last_pill_{ns}"] = picked
+    conversation.__enter__()
 
-    # Delete repo
-    if st.session_state.active_namespace and st.session_state.repos:
-        st.divider()
-        if st.button("🗑 Delete Active Repo", use_container_width=True):
-            requests.delete(
-                f"{BACKEND_URL}/repos/{st.session_state.active_namespace}", timeout=10
-            )
-            st.session_state.active_namespace = None
-            st.session_state.repos = []
-            st.rerun()
+    for m in history:
+        with st.chat_message(m["role"]):
+            st.markdown(m["content"])
+            if m["role"] == "assistant":
+                show_citations(idx, m)
 
-
-# ===========================================================================
-# PAGE: Index Repo
-# ===========================================================================
-
-def page_index():
-    st.title("Index Repository")
-    st.markdown("Clone and index a GitHub repository for semantic code search.")
-
-    with st.form("index_form"):
-        repo_url = st.text_input(
-            "GitHub URL",
-            placeholder="https://github.com/owner/repo",
-        )
-        branch = st.text_input("Branch (optional — auto-detects default)", placeholder="main")
-        submitted = st.form_submit_button("Index Repository", use_container_width=True)
-
-    if submitted and repo_url.strip():
-        # Check if already indexed
-        check = requests.post(
-            f"{BACKEND_URL}/index",
-            json={"repo_url": repo_url.strip(), "branch": branch.strip() or None, "force_reindex": False},
-            timeout=10,
-        )
-        if check.ok:
-            data = check.json()
-
-            if data.get("status") == "already_indexed":
-                st.warning(
-                    f"This repo is already indexed — **{data['chunk_count']} chunks** "
-                    f"across **{data['file_count']} files**."
-                )
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button("✅ Use Existing"):
-                        st.session_state.active_namespace = data["namespace"]
-                        st.session_state.page = "Chat"
-                        st.rerun()
-                with col2:
-                    if st.button("🔄 Re-index"):
-                        st.session_state.pending_reindex_url = repo_url.strip()
-                        # Force re-index
-                        requests.post(
-                            f"{BACKEND_URL}/index",
-                            json={"repo_url": repo_url.strip(), "branch": branch.strip() or None, "force_reindex": True},
-                            timeout=10,
-                        )
-                        _poll_indexing(data["namespace"])
-            else:
-                namespace = data["namespace"]
-                st.session_state.active_namespace = namespace
-                _poll_indexing(namespace)
-        else:
-            st.error(f"Backend error: {check.text}")
-
-
-def _poll_indexing(namespace: str):
-    """Poll /index/status every 2 seconds and show live progress."""
-    progress_placeholder = st.empty()
-    status_placeholder = st.empty()
-
-    progress_bar = progress_placeholder.progress(0)
-    max_wait = 600  # 10 minutes
-    elapsed = 0
-
-    while elapsed < max_wait:
-        try:
-            r = requests.get(
-                f"{BACKEND_URL}/index/status",
-                params={"namespace": namespace},
-                timeout=5,
-            )
-            s = r.json()
-        except Exception:
-            time.sleep(2)
-            elapsed += 2
-            continue
-
-        status = s.get("status", "running")
-        total = s.get("total_files", 1) or 1
-        processed = s.get("processed_files", 0)
-        indexed = s.get("indexed_chunks", 0)
-        current = s.get("current_file", "")
-
-        pct = min(int((processed / total) * 100), 99)
-        progress_bar.progress(pct / 100)
-        status_placeholder.markdown(
-            f"**Processing file {processed} of {total}** — {indexed} chunks indexed  \n"
-            f"`{current}`"
-        )
-
-        if status == "done":
-            progress_bar.progress(1.0)
-            status_placeholder.empty()
-            st.success(
-                f"✅ Indexing complete! **{indexed} chunks** from **{total} files**."
-            )
-            st.session_state.repos = fetch_repos()
-            st.session_state.active_namespace = namespace
-            break
-        elif status == "error":
-            st.error(f"Indexing failed: {s.get('error', 'Unknown error')}")
-            break
-
-        time.sleep(2)
-        elapsed += 2
-
-
-# ===========================================================================
-# PAGE: Chat
-# ===========================================================================
-
-def page_chat():
-    st.title("Chat with Codebase")
-
-    if not st.session_state.active_namespace:
-        st.warning("No active repository. Index one first.")
-        return
-
-    ns = st.session_state.active_namespace
-
-    # --- Symbol search ---
-    with st.container():
-        col1, col2 = st.columns([4, 1])
-        with col1:
-            symbol_query = st.text_input(
-                "🔍 Jump to symbol",
-                placeholder="Type a function or class name…",
-                label_visibility="collapsed",
-            )
-        with col2:
-            search_btn = st.button("Go", use_container_width=True)
-
-    if search_btn and symbol_query.strip():
-        r = requests.get(
-            f"{BACKEND_URL}/symbol",
-            params={"name": symbol_query.strip(), "namespace": ns},
-            timeout=10,
-        )
-        if r.ok:
-            sym = r.json()
-            with st.expander(
-                f"📍 `{sym.get('symbol_name')}` — {sym.get('file_path')} "
-                f"(L{sym.get('start_line')}–{sym.get('end_line')})",
-                expanded=True,
-            ):
-                if sym.get("docstring"):
-                    st.markdown(f"*{sym['docstring']}*")
-                st.code(sym.get("raw_code", ""), language=sym.get("language", "python"))
-        else:
-            st.error(f"Symbol not found: `{symbol_query}`")
-
-    st.divider()
-
-    # --- Sidebar filters ---
-    with st.sidebar:
-        st.markdown("**Chat Filters**")
-        filter_file = st.text_input("Filter by file", placeholder="src/auth.py")
-        filter_type = st.selectbox(
-            "Filter by type",
-            ["(none)", "function", "method", "class", "module", "type"],
-        )
-        filter_type_val = None if filter_type == "(none)" else filter_type
-        filter_file_val = filter_file.strip() or None
-
-    # --- Chat messages ---
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-            if msg.get("sources"):
-                with st.expander("📎 Sources", expanded=False):
-                    for src in msg["sources"]:
-                        st.markdown(
-                            f"**`{src['symbol_name']}`** — `{src['file_path']}` "
-                            f"L{src['start_line']}–{src['end_line']}"
-                        )
-                        if src.get("docstring"):
-                            st.caption(src["docstring"])
-
-    # --- Chat input ---
-    if user_input := st.chat_input("Ask anything about the codebase…"):
-        st.session_state.messages.append({"role": "user", "content": user_input})
+    if question:
+        past = [{"q": history[i]["content"], "a": history[i + 1]["content"]}
+                for i in range(0, len(history) - 1, 2) if history[i + 1]["role"] == "assistant"][-4:]
+        history.append({"role": "user", "content": question})
         with st.chat_message("user"):
-            st.markdown(user_input)
-
-        # Build history payload
-        history = [
-            {"role": m["role"], "content": m["content"]}
-            for m in st.session_state.messages[:-1]
-        ]
-
-        payload = {
-            "question": user_input,
-            "namespace": ns,
-            "history": history,
-            "filter_file": filter_file_val,
-            "filter_type": filter_type_val,
-        }
-
+            st.markdown(question)
         with st.chat_message("assistant"):
-            full_text = ""
-            sources: list[dict] = []
-            text_placeholder = st.empty()
+            final: dict = {}
 
-            # Stream response
-            try:
-                with requests.post(
-                    f"{BACKEND_URL}/query",
-                    json=payload,
-                    stream=True,
-                    timeout=120,
-                ) as resp:
-                    for chunk in resp.iter_content(chunk_size=None, decode_unicode=True):
-                        if chunk:
-                            full_text += chunk
+            def tokens():
+                for kind, payload in agent.stream(question, ns, history=past or None):
+                    if kind == "token":
+                        yield payload
+                    else:
+                        final.update(payload)
+            with st.spinner("Retrieving, grading and checking citations..."):
+                st.write_stream(tokens())
+            msg = {"role": "assistant", "content": final.get("answer", ""), "citations": final.get("citations", []),
+                   "trace": final.get("trace", [])}
+            show_citations(idx, msg)
+            history.append(msg)
+    conversation.__exit__(None, None, None)
 
-                # Parse out the sources trailer
-                SOURCE_MARKER = "<!--SOURCES:"
-                if SOURCE_MARKER in full_text:
-                    text_part, rest = full_text.split(SOURCE_MARKER, 1)
-                    sources_json = rest.rstrip("-->").strip()
-                    try:
-                        sources = json.loads(sources_json)
-                    except Exception:
-                        sources = []
-                    full_text = text_part.strip()
+# --------------------------------------------------------------------------- search
+with t_search:
+    c1, c2, c3 = st.columns([5, 2, 2])
+    q = c1.text_input("Search the code", placeholder="e.g. retry with backoff, parse the config file ...",
+                      key=f"q_{ns}")
+    mode = c2.segmented_control("Retrieval", ["Hybrid", "BM25", "Dense"], default="Hybrid", key="mode")
+    kind = c3.selectbox("Kind", ["any", "function", "method", "class", "module", "type"], key="kind")
+    with_tests = st.toggle("Include test files", value=False, key="with_tests")
+    if q.strip():
+        hits = search.search(idx, q, k=10, mode=(mode or "Hybrid").lower(), kind=None if kind == "any" else kind,
+                             skip_tests=not with_tests)
+        if not hits:
+            st.info("Nothing matched.")
+        top = max((h.score for h in hits), default=1.0) or 1.0
+        for rank, h in enumerate(hits, 1):
+            c = h.chunk
+            doc = c.docstring.splitlines()[0] if c.docstring else (c.signature or "")
+            st.markdown(card(f"{rank}. {c.qualified_name}", c.symbol_type,
+                             f"{c.file_path}:{c.start_line}-{c.end_line}", doc[:220], h.score / top),
+                        unsafe_allow_html=True)
+            with st.expander("Code", expanded=rank == 1):
+                st.code(c.code, language=lang(c), line_numbers=True)
+    else:
+        st.markdown('<div class="cg-note">Hybrid search fuses BM25 over split identifiers (<code>getUserById</code> '
+                    '→ get, user, by, id) with dense embeddings. Switch to BM25 or Dense to see how each one ranks '
+                    'on its own.</div>', unsafe_allow_html=True)
+    st.markdown("#### Go to definition")
+    sym = st.text_input("Symbol", placeholder="Session.send, tokenize, Cart ...", key=f"sym_{ns}",
+                        label_visibility="collapsed")
+    if sym.strip():
+        found = search.find_symbol(idx, sym)
+        if not found:
+            st.warning(f"`{sym}` is not defined in {ns}.")
+        for c in found[:3]:
+            st.markdown(card(c.qualified_name, c.symbol_type, f"{c.file_path}:{c.start_line}-{c.end_line}",
+                             c.signature), unsafe_allow_html=True)
+            st.code(c.code, language=lang(c), line_numbers=True)
 
-                text_placeholder.markdown(full_text)
+# --------------------------------------------------------------------------- impact
+with t_impact:
+    quick = top_targets(idx)
+    c1, c2 = st.columns([5, 2])
+    target = c1.text_input("What are you about to change?", placeholder="a function, Class.method or a file path",
+                           key=f"imp_{ns}")
+    hops = c2.slider("Hops", 1, 4, 3)
+    pick = st.pills("Most depended-on", quick, key=f"imp_pill_{ns}") if quick else None
+    target = target.strip() or (pick or "")
+    if target:
+        rep = impact.analyze(idx, target, max_hops=hops, use_llm=False)
+        aff = rep["affected"]
+        counts = {r: sum(a["risk"] == r for a in aff) for r in ("High", "Medium", "Low")}
+        m = st.columns(4)
+        metric(m[0], rep.get("total_affected", 0), "dependents")
+        metric(m[1], counts["High"], "call it directly")
+        metric(m[2], counts["Medium"], "import its module")
+        metric(m[3], len({a["file"] for a in aff}), "files")
+        st.write("")
+        st.caption(rep["summary"])
+        if aff:
+            nodes = set(rep["matched"][:3]) | {a["node"] for a in aff[:30]}
+            risk = {a["node"]: a["risk"] for a in aff}
+            color = {"High": "#e0115f", "Medium": "#14a098", "Low": "#0d7377"}
+            lines = ['digraph G { rankdir=RL; bgcolor="transparent"; nodesep=0.25; ranksep=0.6;',
+                     'node [shape=box style="filled" fontname="Helvetica" fontsize=11 fontcolor="#ffffff" '
+                     'penwidth=0]; edge [color="#14a098" arrowsize=0.6];']
+            for n in nodes:
+                label = n.split("::", 1)[1] if "::" in n else n
+                fill = "#14f0f0" if n in rep["matched"] else color.get(risk.get(n, "Low"), "#0d7377")
+                font = "#0a1a1a" if n in rep["matched"] else "#ffffff"
+                lines.append(f'"{dq(n)}" [label="{dq(label)}\\n{dq(n.split("::")[0])}" fillcolor="{fill}" '
+                             f'fontcolor="{font}"];')
+            for u, v, d in idx.graph.edges(data=True):
+                if u in nodes and v in nodes and d.get("type") in ("calls", "imports"):
+                    style = "solid" if d["type"] == "calls" else "dashed"
+                    lines.append(f'"{dq(u)}" -> "{dq(v)}" [style={style}];')
+            lines.append("}")
+            st.graphviz_chart("\n".join(lines), use_container_width=True)
+            st.caption("Cyan: what you change · red: calls it directly · teal: imports its module · dark: further "
+                       "away. Solid arrows are calls, dashed are imports.")
+            st.dataframe([{"risk": a["risk"], "symbol": a["symbol"], "file": a["file"], "hops": a["hops"],
+                           "via": a["via"], "why": a["reasoning"]} for a in aff], use_container_width=True,
+                         hide_index=True)
 
-                if sources:
-                    with st.expander("📎 Sources", expanded=False):
-                        for src in sources:
-                            st.markdown(
-                                f"**`{src['symbol_name']}`** — `{src['file_path']}` "
-                                f"L{src['start_line']}–{src['end_line']}"
-                            )
-                            if src.get("docstring"):
-                                st.caption(src["docstring"])
+# --------------------------------------------------------------------------- review
+with t_review:
+    def sample_diff() -> str:
+        for name in top_targets(idx, 20):
+            c = next((c for c in idx.chunks if c.qualified_name == name and c.symbol_type in ("function", "method")
+                      and c.language == "python"), None)
+            if not c:
+                continue
+            src = idx.files.get(c.file_path, "").splitlines()
+            body = next((i for i in range(c.start_line, min(c.end_line, len(src))) if src[i].strip()
+                         and not src[i].strip().startswith(('"""', "'''", "#", "@", "def ", ")"))), None)
+            if body is None:
+                continue
+            line = src[body]
+            indent = line[: len(line) - len(line.lstrip())]
+            return (f"diff --git a/{c.file_path} b/{c.file_path}\n--- a/{c.file_path}\n+++ b/{c.file_path}\n"
+                    f"@@ -{body + 1},1 +{body + 1},2 @@\n+{indent}# behaviour change under review\n {line}\n")
+        return ""
 
-            except Exception as e:
-                full_text = f"⚠️ Stream error: {e}"
-                text_placeholder.error(full_text)
+    if st.button("Load a sample diff for this repository"):
+        st.session_state[f"diff_{ns}"] = sample_diff()
+    diff = st.text_area("Paste a unified diff (the output of git diff)", height=180, key=f"diff_{ns}",
+                        placeholder="diff --git a/... b/...")
+    if diff.strip():
+        r = review.review(idx, diff)
+        st.markdown(f'<div class="cg-card"><div class="t">Risk<span class="cg-badge badge-{esc(r["risk_score"])}">'
+                    f'{esc(r["risk_score"])}</span></div><div class="d">{esc(r["summary"])}</div>'
+                    f'<div class="m">{esc(r.get("risk_justification", ""))}</div></div>', unsafe_allow_html=True)
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**Changed symbols**")
+            for sname in r["affected_symbols"] or ["(none matched the index)"]:
+                st.markdown(f"- `{sname}`")
+            st.markdown("**Risks**")
+            st.markdown(r["risks"])
+        with c2:
+            st.markdown("**Dependents outside the diff**")
+            st.dataframe([{"risk": a["risk"], "symbol": a["symbol"], "file": a["file"], "hops": a["hops"]}
+                          for a in r["dependents"]], use_container_width=True, hide_index=True)
+            st.markdown("**Suggested tests**")
+            st.markdown(r["suggested_tests"])
+        st.download_button("Download the review (Markdown)", review.to_markdown(r, diff), file_name="review.md")
 
-        st.session_state.messages.append(
-            {"role": "assistant", "content": full_text, "sources": sources}
-        )
+# --------------------------------------------------------------------------- architecture
+with t_arch:
+    g = idx.graph
+    edges = [(u, v) for u, v, d in g.edges(data=True) if d.get("type") == "imports" and u != v]
+    if not edges:
+        st.info("No imports between files were found in this repository.")
+    else:
+        deg: dict[str, int] = {}
+        for u, v in edges:
+            deg[u] = deg.get(u, 0) + 1
+            deg[v] = deg.get(v, 0) + 1
+        c1, c2 = st.columns([4, 1])
+        limit = c1.slider("Files shown (most connected first)", 10, 80, 35)
+        arch_tests = c2.toggle("Include tests", value=False, key="arch_tests")
+        ranked_files = [f for f in sorted(deg, key=lambda f: -deg[f]) if arch_tests or not TEST_PATH.search(f)]
+        keep = set(ranked_files[:limit])
+        groups: dict[str, list[str]] = {}
+        for f in keep:
+            groups.setdefault(str(Path(f).parent), []).append(f)
+        lines = ['digraph A { rankdir=LR; bgcolor="transparent"; nodesep=0.2; ranksep=0.5;',
+                 'node [shape=box style="filled" fillcolor="#0f1f1f" color="#0d7377" fontcolor="#c8e8e8" '
+                 'fontname="Helvetica" fontsize=10]; edge [color="#14a098" arrowsize=0.5];']
+        for i, (folder, files) in enumerate(sorted(groups.items())):
+            lines.append(f'subgraph cluster_{i} {{ label="{dq(folder)}"; fontcolor="#5a9a9a"; color="#0d7377"; '
+                         'fontname="Helvetica"; fontsize=10;')
+            lines += [f'"{dq(f)}" [label="{dq(Path(f).name)}"];' for f in files]
+            lines.append("}")
+        lines += [f'"{dq(u)}" -> "{dq(v)}";' for u, v in edges if u in keep and v in keep]
+        lines.append("}")
+        st.graphviz_chart("\n".join(lines), use_container_width=True)
+        st.caption(f"{len(keep)} of {len(deg)} connected files, grouped by folder; an arrow means 'imports'.")
 
-
-# ===========================================================================
-# PAGE: Change Impact
-# ===========================================================================
-
-def page_impact():
-    st.title("Change Impact Analysis")
-    st.markdown(
-        "Enter a function or file name to see what else in the codebase "
-        "would be affected if it changed."
-    )
-
-    if not st.session_state.active_namespace:
-        st.warning("No active repository.")
-        return
-
-    col1, col2 = st.columns([4, 1])
-    with col1:
-        symbol = st.text_input(
-            "Function or file name",
-            placeholder="authenticate_user",
-            label_visibility="collapsed",
-        )
-    with col2:
-        analyze_btn = st.button("Analyze Impact", use_container_width=True)
-
-    if analyze_btn and symbol.strip():
-        with st.spinner("Analyzing dependency graph…"):
-            r = requests.post(
-                f"{BACKEND_URL}/impact",
-                json={"symbol": symbol.strip(), "namespace": st.session_state.active_namespace},
-                timeout=120,
-            )
-
-        if r.ok:
-            data = r.json()
-            st.markdown(f"### Target: `{data['target']}`")
-            st.info(data["summary"])
-
-            affected = data.get("affected", [])
-            if not affected:
-                st.success("No dependents found — this symbol is safe to change in isolation.")
-                return
-
-            # Risk table
-            st.markdown("#### Affected Symbols")
-            for item in affected:
-                risk = item.get("risk", "Medium")
-                col_sym, col_file, col_risk = st.columns([2, 3, 1])
-                with col_sym:
-                    st.markdown(f"`{item['symbol']}`")
-                with col_file:
-                    st.markdown(f"`{item['file']}`")
-                with col_risk:
-                    st.markdown(risk_badge(risk), unsafe_allow_html=True)
-
-                with st.expander(f"Details — {item['symbol']}"):
-                    st.markdown(item.get("reasoning", ""))
-                st.divider()
-        else:
-            st.error(f"Error: {r.text}")
-
-
-# ===========================================================================
-# PAGE: PR Review
-# ===========================================================================
-
-def page_pr_review():
-    st.title("PR Review Agent")
-    st.markdown(
-        "Paste a `git diff` to get an AI-powered code review grounded in your codebase."
-    )
-
-    if not st.session_state.active_namespace:
-        st.warning("No active repository.")
-        return
-
-    diff_text = st.text_area(
-        "Git diff",
-        height=280,
-        placeholder="Paste output of `git diff main...feature-branch` here…",
-        label_visibility="collapsed",
-    )
-
-    if st.button("Review PR", use_container_width=True) and diff_text.strip():
-        with st.spinner("Reviewing diff with codebase context…"):
-            r = requests.post(
-                f"{BACKEND_URL}/review",
-                json={"diff": diff_text, "namespace": st.session_state.active_namespace},
-                timeout=180,
-            )
-
-        if r.ok:
-            data = r.json()
-            risk = data.get("risk_score", "Medium")
-
-            # Risk score badge at top
-            st.markdown(
-                f"### Risk Score: &nbsp; {risk_badge(risk)}",
-                unsafe_allow_html=True,
-            )
-            st.markdown(data.get("risk_justification", ""))
-
-            tab_summary, tab_risks, tab_tests, tab_symbols = st.tabs(
-                ["Summary", "Risks", "Suggested Tests", "Affected Symbols"]
-            )
-
-            with tab_summary:
-                st.markdown(data.get("summary", ""))
-
-            with tab_risks:
-                st.markdown(data.get("risks", ""))
-
-            with tab_tests:
-                st.markdown(data.get("suggested_tests", ""))
-
-            with tab_symbols:
-                syms = data.get("affected_symbols", [])
-                if syms:
-                    for s in syms:
-                        st.markdown(f"- `{s}`")
-                else:
-                    st.markdown("No specific symbols detected.")
-
-            # Download button
-            st.download_button(
-                "⬇️ Export Review as Markdown",
-                data=data.get("markdown", ""),
-                file_name="pr_review.md",
-                mime="text/markdown",
-            )
-        else:
-            st.error(f"Error: {r.text}")
-
-
-# ===========================================================================
-# PAGE: Architecture
-# ===========================================================================
-
-def page_architecture():
-    st.title("Architecture Diagram")
-    st.markdown("Auto-generated from static import analysis of the indexed repo.")
-
-    if not st.session_state.active_namespace:
-        st.warning("No active repository.")
-        return
-
-    if st.button("Generate Diagram", use_container_width=True):
-        with st.spinner("Analyzing imports…"):
-            r = requests.get(
-                f"{BACKEND_URL}/diagram",
-                params={"namespace": st.session_state.active_namespace},
-                timeout=30,
-            )
-
-        if r.ok:
-            data = r.json()
-            mermaid = data.get("mermaid", "")
-            table = data.get("dependency_table", [])
-
-            # Count nodes to set height
-            node_count = mermaid.count("-->") + 5
-            height = max(400, min(node_count * 60, 1200))
-
-            # Render via Mermaid.js CDN
-            mermaid_html = f"""
-            <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
-            <script>mermaid.initialize({{startOnLoad:true, theme:'dark', securityLevel:'loose'}});</script>
-            <div class="mermaid" style="background:#0f1f1f; padding:20px; border:1px solid #0d7377;">
-{mermaid}
-            </div>
-            """
-            st.components.v1.html(mermaid_html, height=height, scrolling=True)
-
-            # Download diagram
-            md_content = f"```mermaid\n{mermaid}\n```"
-            st.download_button(
-                "⬇️ Export Diagram as Markdown",
-                data=md_content,
-                file_name="architecture.md",
-                mime="text/markdown",
-            )
-
-            # Dependency table
-            if table:
-                st.markdown("### File Dependency Table")
-                st.markdown(
-                    "| File | Imports | Imported By |",
-                )
-                st.markdown("| --- | --- | --- |")
-                for row in table:
-                    imports_str = ", ".join(f"`{f}`" for f in row["imports"]) or "—"
-                    imported_by_str = ", ".join(f"`{f}`" for f in row["imported_by"]) or "—"
-                    st.markdown(
-                        f"| `{row['file']}` | {imports_str} | {imported_by_str} |"
-                    )
-        else:
-            st.error(f"Error: {r.text}")
-
-
-# ===========================================================================
-# Router
-# ===========================================================================
-
-page = st.session_state.page
-
-if page == "Index Repo":
-    page_index()
-elif page == "Chat":
-    page_chat()
-elif page == "Change Impact":
-    page_impact()
-elif page == "PR Review":
-    page_pr_review()
-elif page == "Architecture":
-    page_architecture()
+# --------------------------------------------------------------------------- benchmarks
+with t_bench:
+    res = ROOT / "evals" / "results"
+    st.markdown("CodeoGraph is measured in CI on **40 hand-written questions about psf/requests**. Most describe "
+                "behaviour in plain English without naming the function, and every change to the search code has "
+                "to keep Recall@5 above the gate.")
+    try:
+        rows = json.loads((res / "retrieval.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        rows = []
+    if rows:
+        base = [r for r in rows if r["model"] == rows[0]["model"]]
+        default = next((r for r in base if "default" in r["config"]), base[0])
+        m = st.columns(4)
+        metric(m[0], f"{default['recall@1']:.2f}", "Recall@1 (default pipeline)")
+        metric(m[1], f"{default['recall@5']:.2f}", "Recall@5")
+        metric(m[2], f"{default['mrr@10']:.3f}", "MRR@10")
+        metric(m[3], f"{default['p50_ms']:.0f} ms", "median query time")
+        st.write("")
+        st.bar_chart({re.sub(r" \(default\)", " *", r["config"]): r["mrr@10"] for r in base}, horizontal=True,
+                     x_label="MRR@10", color="#14a098", height=320)
+        st.caption("* default. The generic MS MARCO cross-encoder made code search worse and costs over a second a "
+                   "query, so reranking is off by default; score-weighted fusion beat Reciprocal Rank Fusion.")
+        with st.expander("Every configuration"):
+            st.dataframe([{k: r[k] for k in ("model", "config", "recall@1", "recall@5", "recall@10", "mrr@10",
+                                             "ndcg@10", "p50_ms")} for r in rows], use_container_width=True,
+                         hide_index=True)
+    try:
+        ans = json.loads((res / "answers.json").read_text())["summary"]
+        st.markdown("#### Answers: LangGraph agent, scored with RAGAS")
+        m = st.columns(4)
+        metric(m[0], f"{ans['target_cited']:.0%}", "cite the right function")
+        metric(m[1], f"{ans['has_citation']:.0%}", "carry a valid citation")
+        metric(m[2], f"{ans.get('ragas_context_precision') or 0:.2f}", "RAGAS context precision")
+        metric(m[3], ans["model"].split(":")[-1], "model (CPU runner)")
+        st.caption("Answered and judged by a small open model on a CPU runner, so treat answer quality as a floor; "
+                   "the retrieval numbers above do not depend on the model.")
+    except (OSError, json.JSONDecodeError, KeyError):
+        pass

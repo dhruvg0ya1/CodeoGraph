@@ -106,9 +106,12 @@ def _weighted(dense: list[tuple[int, float]], sparse: list[tuple[int, float]], w
     return {i: w * d.get(i, 0.0) + (1 - w) * s.get(i, 0.0) for i in set(d) | set(s)}
 
 
+TEST_PATH = re.compile(r"(^|/)(tests?|testing|spec)/|(^|/)test_[^/]*$|_test\.py$|\.(test|spec)\.[jt]sx?$")
+
+
 def search(index: store.RepoIndex, query: str, k: int = 8, *, mode: str = "hybrid", fusion: str | None = None,
            rerank: bool | None = None, weight: float | None = None, file: str | None = None,
-           kind: str | None = None) -> list[Hit]:
+           kind: str | None = None, skip_tests: bool = False) -> list[Hit]:
     """mode: hybrid | bm25 | dense. Filters `file` (exact repo path) and `kind` (function, method, class ...)."""
     settings = get_settings()
     fusion = fusion or settings.fusion
@@ -128,7 +131,10 @@ def search(index: store.RepoIndex, query: str, k: int = 8, *, mode: str = "hybri
     else:
         w = settings.dense_weight if weight is None else weight
         scored = _rrf([dense, sparse]) if fusion == "rrf" else _weighted(dense, sparse, w)
-    ranked = sorted(scored.items(), key=lambda x: -x[1])[: n]
+    ranked = sorted(scored.items(), key=lambda x: -x[1])
+    if skip_tests:
+        ranked = [(i, sc) for i, sc in ranked if not TEST_PATH.search(index.chunks[i].file_path)]
+    ranked = ranked[: n]
     r_sparse = {i: r for r, (i, _) in enumerate(sparse)}
     r_dense = {i: r for r, (i, _) in enumerate(dense)}
     hits = [Hit(index.chunks[i], s, r_sparse.get(i), r_dense.get(i)) for i, s in ranked]
