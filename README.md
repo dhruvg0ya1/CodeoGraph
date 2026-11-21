@@ -210,3 +210,5 @@ tests/        unit and integration tests on a small mixed-language fixture repo
 - In the answer eval, the judge is the same model that writes the answers, and in CI that is a small 3B model.
 
 The [v1 demo video](https://www.youtube.com/watch?v=HWVfFtDU9rg) shows the original interface.
+
+MIT licence - see [LICENSE](LICENSE).
