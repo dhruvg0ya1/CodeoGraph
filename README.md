@@ -6,6 +6,9 @@ API, a Streamlit UI or any MCP client (Claude Code, Claude Desktop, Cursor).**
 [![ci](https://github.com/dhruvg0ya1/CodeoGraph/actions/workflows/ci.yml/badge.svg)](https://github.com/dhruvg0ya1/CodeoGraph/actions/workflows/ci.yml)
 [![evals](https://github.com/dhruvg0ya1/CodeoGraph/actions/workflows/evals.yml/badge.svg)](https://github.com/dhruvg0ya1/CodeoGraph/actions/workflows/evals.yml)
 
+**Live demo: [codeograph.streamlit.app](https://codeograph.streamlit.app)** - psf/requests and CodeoGraph itself are
+indexed; ask, search, trace change impact, review a diff or add any public repository.
+
 Most "chat with your repo" tools cut files into fixed-size text and hope the right piece comes back. CodeoGraph
 parses the code, so every function, method and class is its own unit; searches it two ways at once; knows who calls
 what; and answers only from code it can point to by file and line.
