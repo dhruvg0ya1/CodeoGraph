@@ -69,7 +69,8 @@ codeograph ask    psf-requests "where is the proxy chosen for a URL?"
 git diff | codeograph review psf-requests -
 ```
 
-Indexing and search need nothing else. Answers and LLM-written reviews need one model - pick any:
+Indexing and search need nothing else. Answers and LLM-written reviews need one model - pick any (copy
+`.env.example` to `.env`; `GOOGLE_API_KEY` is already there, empty):
 
 | `CODEOGRAPH_LLM` | Set | Notes |
 |---|---|---|
