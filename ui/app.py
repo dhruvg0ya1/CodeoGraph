@@ -23,7 +23,7 @@ import streamlit as st
 # Config
 # ---------------------------------------------------------------------------
 
-BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
+BACKEND_URL = os.getenv("BACKEND_URL", "")      # empty: run the API inside this process (one command, no server)
 
 st.set_page_config(
     page_title="CodeoGraph",
@@ -31,6 +31,33 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+
+@st.cache_resource(show_spinner="Starting CodeoGraph...")
+def _embedded_backend() -> str:
+    """With no BACKEND_URL, serve codeograph.api on a free local port in a background thread, so
+    `streamlit run ui/app.py` (or Streamlit Community Cloud) is the whole app."""
+    import socket
+    import threading
+
+    import uvicorn
+
+    from codeograph.api import app as api_app
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(api_app, host="127.0.0.1", port=port, log_level="warning"))
+    threading.Thread(target=server.run, daemon=True).start()
+    for _ in range(200):
+        if server.started:
+            break
+        time.sleep(0.05)
+    return f"http://127.0.0.1:{port}"
+
+
+if not BACKEND_URL:
+    BACKEND_URL = _embedded_backend()
 
 # ---------------------------------------------------------------------------
 # Custom CSS — dark, minimal, production-looking

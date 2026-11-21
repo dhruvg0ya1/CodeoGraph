@@ -13,7 +13,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v6
-      - run: uv venv --python ${{ matrix.python }} && uv pip install -e ".[dev]"
+      - run: uv venv --python ${{ matrix.python }} && uv pip install -e ".[dev,ui]"
       - name: Lint
         run: .venv/bin/ruff check codeograph tests evals
       - name: Tests (hash embedder, no LLM, no network models)

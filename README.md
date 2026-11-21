@@ -113,8 +113,11 @@ Then ask your assistant to "index https://github.com/owner/repo with codeograph 
 
 ```bash
 codeograph serve --port 8000          # OpenAPI docs at http://localhost:8000/docs
-pip install "codeograph[ui]" && streamlit run ui/app.py
+pip install "codeograph[ui]" && streamlit run ui/app.py     # the UI starts its own API when BACKEND_URL is unset
 ```
+
+The UI deploys as-is to Streamlit Community Cloud (main file `ui/app.py`; `ui/requirements.txt` installs the
+package).
 
 `POST /index`, `GET /index/status`, `POST /query` (streams the answer, then the cited sources), `POST /ask`,
 `GET /search`, `GET /symbol`, `POST /impact`, `POST /review`, `GET /diagram`, `GET /repos`, `DELETE /repos/{ns}`,
