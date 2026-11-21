@@ -41,6 +41,13 @@ def test_agent_with_llm_grades_generates_and_verifies(indexed):
     assert r["citations"] == [r["citations"][0]] and r["citations"][0]["cited"] is True
 
 
+def test_agent_counts_a_named_source_as_cited(indexed):
+    llm.set_model(FakeListChatModel(responses=['{"relevant": [0, 1]}', "It is done by `charge_card`, with backoff."]))
+    r = agent.ask("how are card charges retried?", "mini")
+    named = [c for c in r["citations"] if c["cited"]]
+    assert named and named[0]["symbol_name"] == "charge_card" and named[0]["cited_by"] == "name"
+
+
 def test_agent_rewrites_when_nothing_is_relevant(indexed):
     llm.set_model(FakeListChatModel(responses=[
         '{"relevant": []}',                    # grade: nothing useful

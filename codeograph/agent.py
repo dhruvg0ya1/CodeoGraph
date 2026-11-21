@@ -147,9 +147,10 @@ def _route_after_grade(state: State) -> str:
 
 SYSTEM = (
     "You are CodeoGraph, a precise assistant for one software repository. Answer ONLY from the numbered sources. "
-    "Cite every claim with the source number in square brackets, like [2]. Name functions and files in backticks. "
-    "If the sources do not contain the answer, say so plainly instead of guessing. Be concise and technical; "
-    "use short code blocks only when they help."
+    "End every sentence that states something about the code with the number of the source it comes from in "
+    "square brackets, e.g. \"`Session.send` hands the request to the mounted adapter [2].\" Name functions and "
+    "files in backticks. If the sources do not contain the answer, say so plainly instead of guessing. Be concise "
+    "and technical; use short code blocks only when they help."
 )
 
 
@@ -205,13 +206,22 @@ def verify(state: State) -> dict:
     invalid = [n for n in used if n not in valid]
     for n in invalid:
         answer = answer.replace(f"[{n}]", "")
-    cited = valid or list(range(1, min(len(srcs), 5) + 1))
+    # a source the answer names (its qualified name, or a distinctive short name) counts as cited too - small
+    # models often write `get_netrc_auth` instead of [3]
+    named = [] if valid else [
+        n for n, h in enumerate(srcs, 1)
+        if re.search(rf"(?<![\w.]){re.escape(h.chunk.qualified_name)}(?![\w])", answer)
+        or (len(h.chunk.symbol_name) >= 5 and re.search(rf"`[\w.]*{re.escape(h.chunk.symbol_name)}(\(\))?`", answer))]
+    cited = valid or named or list(range(1, min(len(srcs), 5) + 1))
+    how = "marker" if valid else "name" if named else ""
     citations = [{"n": n, "file_path": srcs[n - 1].chunk.file_path, "symbol_name": srcs[n - 1].chunk.qualified_name,
                   "start_line": srcs[n - 1].chunk.start_line, "end_line": srcs[n - 1].chunk.end_line,
-                  "docstring": srcs[n - 1].chunk.docstring[:200], "cited": n in valid} for n in cited]
+                  "docstring": srcs[n - 1].chunk.docstring[:200], "cited": bool(how), "cited_by": how}
+                 for n in cited]
     return {"answer": answer, "citations": citations, "invalid_citations": invalid,
             "history": [{"q": state["question"], "a": answer}],
-            "trace": [f"verify: {len(valid)} valid citation(s)" + (f", removed {invalid}" if invalid else "")]}
+            "trace": [f"verify: {len(valid)} valid citation(s)" + (f", {len(named)} by name" if named else "")
+                      + (f", removed {invalid}" if invalid else "")]}
 
 
 # --------------------------------------------------------------------------- graph

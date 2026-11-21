@@ -44,8 +44,10 @@ jobs:
           git config user.name "codeograph-evals"
           git config user.email "codeograph-evals@users.noreply.github.com"
           git add README.md evals/results
-          git diff --cached --quiet || git commit -m "evals: retrieval results [skip ci]"
-          git pull --rebase -q && git push -q
+          git diff --cached --quiet && exit 0
+          git commit -q -m "evals: retrieval results [skip ci]"
+          for i in 1 2 3; do git pull --rebase -q && git push -q && exit 0; done
+          exit 1
 
   answers:
     needs: retrieval
@@ -78,11 +80,17 @@ jobs:
           fi
       - name: Answer eval (agent answers + citations; RAGAS on the first 5)
         run: .venv/bin/python evals/answer_eval.py --n 10 --ragas-n 5 --write-readme
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: answer-eval
+          path: evals/results
       - name: Commit refreshed results
         run: |
           git config user.name "codeograph-evals"
           git config user.email "codeograph-evals@users.noreply.github.com"
-          git pull --rebase -q || true
           git add README.md evals/results
-          git diff --cached --quiet || git commit -m "evals: answer results [skip ci]"
-          git push -q
+          git diff --cached --quiet && exit 0
+          git commit -q -m "evals: answer results [skip ci]"
+          for i in 1 2 3; do git pull --rebase -q && git push -q && exit 0; done
+          exit 1

@@ -161,7 +161,8 @@ flowchart LR
 - `classify` is rules, not an LLM call: code identifiers in the question (`snake_case`, `camelCase`, `Dotted.name`,
   backticks) plus intent words decide between go-to-definition, an impact walk and a general search.
 - `grade` and `rewrite` are a corrective-RAG loop (at most two rewrites).
-- `verify` is deterministic: a citation that does not point at a retrieved source is removed and reported.
+- `verify` is deterministic: a `[n]` that does not point at a retrieved source is removed and reported; an answer
+  that names a retrieved function in backticks instead of numbering it still gets that source as its citation.
 - A LangGraph checkpointer keeps each thread's history, so follow-ups like "and who calls it?" work.
 
 **Indexes** live in `~/.codeograph/indexes/<namespace>/` (chunks, vectors, graph, file snapshot) and survive
