@@ -35,7 +35,8 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: .codeograph/models
-          key: fastembed-${{ inputs.models || 'BAAI/bge-small-en-v1.5' }}-v2
+          key: fastembed-v3-${{ github.run_id }}
+          restore-keys: fastembed-v3-
       - name: Retrieval eval (gate - Recall@5 of the default pipeline)
         run: .venv/bin/python evals/retrieval_eval.py --models "${{ inputs.models || 'BAAI/bge-small-en-v1.5' }}" --write-readme --min-recall5 0.85
       - name: Commit refreshed results
@@ -61,7 +62,8 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: .codeograph/models
-          key: fastembed-BAAI/bge-small-en-v1.5-v2
+          key: fastembed-v3-answers-${{ github.run_id }}
+          restore-keys: fastembed-v3-
       - name: An LLM - Gemini if the repo has a GOOGLE_API_KEY secret, else Qwen2.5 3B on the runner via Ollama
         run: |
           if [ -n "$GOOGLE_API_KEY" ]; then
