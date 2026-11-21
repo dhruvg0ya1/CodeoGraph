@@ -1,0 +1,132 @@
+{
+  "summary": {
+    "model": "openai:qwen2.5:3b",
+    "questions": 10,
+    "target_cited": 0.7,
+    "has_citation": 1.0,
+    "removed_citations": 0,
+    "p50_seconds": 124.9,
+    "ragas_faithfulness": 0.188,
+    "ragas_faithfulness_scored": 4,
+    "ragas_context_precision": 1.0,
+    "ragas_context_precision_scored": 4
+  },
+  "rows": [
+    {
+      "id": "rq01",
+      "target_cited": true,
+      "has_citation": true,
+      "removed_citations": 0,
+      "seconds": 80.0,
+      "answer": "The library decides whether to drop the Authorization header when a redirect goes to another host by checking if the hostname of the old and new URLs differ. If they do, the method `should_strip_auth` returns `True`, indicating that the Authorization header should be removed. This decision is made in the method `SessionRedirectMixin.should_strip_auth` [1].",
+      "cited": [
+        "src/requests/sessions.py::SessionRedirectMixin.should_strip_auth"
+      ]
+    },
+    {
+      "id": "rq02",
+      "target_cited": true,
+      "has_citation": true,
+      "removed_citations": 0,
+      "seconds": 105.3,
+      "answer": "Redirects are followed by the `resolve_redirects` method in the `SessionRedirectMixin` class, which is part of the `Session` class. The maximum number of redirects is enforced by checking if the number of redirects in the history exceeds the `max_redirects` attribute, which is set to 30 by default. If the number of redirects reaches this limit, a `TooManyRedirects` exception is raised.",
+      "cited": [
+        "src/requests/exceptions.py::TooManyRedirects",
+        "src/requests/sessions.py::SessionRedirectMixin.resolve_redirects"
+      ]
+    },
+    {
+      "id": "rq03",
+      "target_cited": false,
+      "has_citation": true,
+      "removed_citations": 0,
+      "seconds": 64.0,
+      "answer": "The HTTP method is changed to GET after a 303 See Other redirect. This is demonstrated in the test `test_http_303_changes_post_to_get` from `tests/test_requests.py` [2], where a POST request to a server that responds with a 303 See Other status code results in the request method being changed to GET in the response object.",
+      "cited": [
+        "tests/test_requests.py::TestRequests.test_http_303_changes_post_to_get"
+      ]
+    },
+    {
+      "id": "rq04",
+      "target_cited": true,
+      "has_citation": true,
+      "removed_citations": 0,
+      "seconds": 154.2,
+      "answer": "Environment variables like HTTPS_PROXY and REQUESTS_CA_BUNDLE get merged into the request settings through the `merge_environment_settings` method in the `Session` class. This method is defined in the `src/requests/sessions.py` file, specifically in lines 750-779. It gathers clues from the surrounding environment and merges them with some settings, including environment variables for proxies and verification. The method is called with the URL, proxies, stream, verify, and cert as parameters. It checks if the `trust_env` flag is set to true, and if so, it will merge the environment variables in",
+      "cited": [
+        "src/requests/sessions.py::Session.merge_environment_settings"
+      ]
+    },
+    {
+      "id": "rq05",
+      "target_cited": true,
+      "has_citation": true,
+      "removed_citations": 0,
+      "seconds": 269.3,
+      "answer": "The function `should_bypass_proxies` decides that a host should skip the proxy based on the `no_proxy` setting by checking if the hostname of the URL matches any of the entries in the `no_proxy` list. Here's a breakdown of the process:\n\n1. **Hostname Matching**: The function first checks if the hostname of the URL matches any of the entries in the `no_proxy` list. This is done by checking if the hostname ends with any of the entries in the `no_proxy` list. For example, if `no_proxy` is set to `\"192.168.0.0/24,127.0.0.1,localhost.localdomain,172.16.1.1\"`, and the URL's hostname is `192.168.0.1`",
+      "cited": [
+        "tests/test_utils.py::TestGetEnvironProxies.no_proxy",
+        "src/requests/utils.py::should_bypass_proxies"
+      ]
+    },
+    {
+      "id": "rq06",
+      "target_cited": true,
+      "has_citation": true,
+      "removed_citations": 0,
+      "seconds": 144.5,
+      "answer": "The connection pool manager for a proxy is created and cached within the `HTTPAdapter.proxy_manager_for` method. This method is called when a proxy is needed for a request and it returns a `urllib3.ProxyManager` instance. This manager is used to create a connection pool for the specific proxy URL. The `HTTPAdapter.proxy_manager_for` method checks if the proxy is already in the `self.proxy_manager` dictionary, and if not, it creates a new `urllib3.ProxyManager` instance. The `self.proxy_manager` dictionary is used to cache these managers, allowing for efficient reuse of the same proxy connectio",
+      "cited": [
+        "src/requests/adapters.py::HTTPAdapter.proxy_manager_for",
+        "src/requests/adapters.py::HTTPAdapter"
+      ]
+    },
+    {
+      "id": "rq07",
+      "target_cited": false,
+      "has_citation": true,
+      "removed_citations": 0,
+      "seconds": 203.9,
+      "answer": "TLS certificate verification and client certificate files are configured on the connection within the `TLSServer` class, specifically in the `__init__` method. This is evident from the following lines of code in the `TLSServer` class:\n\n```python\n        self.ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)\n        self.ssl_context.load_cert_chain(self.cert_chain, keyfile=self.keyfile)\n        self.mutual_tls = mutual_tls\n        self.cacert = cacert\n        if mutual_tls:\n            # For simplicity, we're going to assume that the client cert is\n            # issued by the same CA as our",
+      "cited": [
+        "tests/testserver/server.py::TLSServer.__init__",
+        "src/requests/sessions.py::Session.__init__"
+      ]
+    },
+    {
+      "id": "rq08",
+      "target_cited": true,
+      "has_citation": true,
+      "removed_citations": 0,
+      "seconds": 237.0,
+      "answer": "The transport adapter, specifically the `HTTPAdapter` class, transforms a low-level urllib3 response into a Requests library's Response object by initializing a `Response` instance and populating it with relevant attributes from the urllib3 response. Here's a breakdown of the process:\n\n```python\n    def build_response(self, req, resp):\n        \"\"\"Builds a :class:`Response <requests.Response>` object from a urllib3\n        response. This should not be called from user code, and is only exposed\n        for use when subclassing the\n        :class:`HTTPAdapter <requests.adapters.HTTPAdapter>`\n\n   ",
+      "cited": [
+        "src/requests/adapters.py::HTTPAdapter.build_response",
+        "src/requests/adapters.py::HTTPAdapter",
+        "src/requests/cookies.py::extract_cookies_to_jar"
+      ]
+    },
+    {
+      "id": "rq09",
+      "target_cited": false,
+      "has_citation": true,
+      "removed_citations": 0,
+      "seconds": 57.9,
+      "answer": "The adapter sends the request to the mounted adapter, which then handles the request and maps socket errors to exceptions such as `ConnectTimeout` and `ReadTimeout` [1].",
+      "cited": [
+        "src/requests/adapters.py::adapters"
+      ]
+    },
+    {
+      "id": "rq10",
+      "target_cited": true,
+      "has_citation": true,
+      "removed_citations": 0,
+      "seconds": 98.8,
+      "answer": "When a response has a 4xx or 5xx status code, the error message is built by checking the `reason` attribute of the response. If `reason` is a bytes object, it attempts to decode it first using utf-8 encoding. If decoding fails, it falls back to iso-8859-1 encoding. The status code and the decoded or fallback reason string are then used to construct the error message. This is implemented in the `Response.raise_for_status` method [1].",
+      "cited": [
+        "src/requests/models.py::Response.raise_for_status"
+      ]
+    }
+  ]
+}
