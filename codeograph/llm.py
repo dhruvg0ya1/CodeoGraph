@@ -1,6 +1,8 @@
 """The chat model behind answers, grading and reviews - any provider, or none.
 
-    CODEOGRAPH_LLM=gemini   GOOGLE_API_KEY (free tier works)            model GEMINI_MODEL
+    CODEOGRAPH_LLM=gemini   GOOGLE_API_KEY (free tier works)            GEMINI_MODEL: one model or a chain, best first
+                            (default gemini-3.5-flash-lite, then 3.1-flash-lite, 3.5-flash, 2.5-flash - each has
+                            its own free daily quota, so the next one answers when one runs out)
     CODEOGRAPH_LLM=openai   OPENAI_BASE_URL + OPENAI_API_KEY            model OPENAI_MODEL
                             -> OpenAI, or any OpenAI-compatible server: vLLM, Ollama, LM Studio, OpenRouter, Groq
     CODEOGRAPH_LLM=none     no model: search, symbols, impact, diagrams and MCP still work; answers are extractive
@@ -14,6 +16,7 @@ import contextvars
 import json
 import os
 import re
+import time
 from functools import lru_cache
 from typing import Any
 
@@ -54,13 +57,88 @@ def provider() -> str:
     return "none"
 
 
+_GONE = re.compile(r"PerDay|no longer available|not found|NOT_FOUND|404|PERMISSION_DENIED", re.I)
+
+
+class FallbackChat(BaseChatModel):
+    """Several chat models tried in order - the next one answers when one fails.
+
+    Free API tiers give each model its own small daily quota (Gemini: 20 requests a day per model on some models),
+    so a chain of models keeps a demo or an eval answering long after the first quota is gone. A model that is out of
+    its daily quota or retired is skipped for `rest_seconds`; any other error (a 503 "high demand", a timeout) only
+    moves that one call on to the next model. `used` counts which model answered, for honest labels in evals.
+    """
+
+    models: list[BaseChatModel]
+    names: list[str]
+    rest_seconds: float = 1800.0
+    resting: dict[str, float] = {}
+    used: dict[str, int] = {}
+
+    @property
+    def _llm_type(self) -> str:
+        return "codeograph-fallback"
+
+    @property
+    def model_name(self) -> str:
+        if self.used:
+            return "+".join(n for n, _ in sorted(self.used.items(), key=lambda kv: -kv[1]))
+        return self.names[0]
+
+    def _live(self) -> list[tuple[str, BaseChatModel]]:
+        now = time.time()
+        live = [(n, m) for n, m in zip(self.names, self.models, strict=True) if self.resting.get(n, 0) <= now]
+        return live or list(zip(self.names, self.models, strict=True))           # all resting: try them all again
+
+    def _failed(self, name: str, err: Exception) -> None:
+        if _GONE.search(f"{type(err).__name__} {err}"):
+            self.resting[name] = time.time() + self.rest_seconds
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        last: Exception | None = None
+        for name, m in self._live():
+            try:
+                out = m._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
+                self.used[name] = self.used.get(name, 0) + 1
+                return out
+            except Exception as e:  # noqa: BLE001 - the next model takes the call
+                self._failed(name, e)
+                last = e
+        raise last or RuntimeError("no model in the chain answered")
+
+    def _stream(self, messages, stop=None, run_manager=None, **kwargs):
+        last: Exception | None = None
+        for name, m in self._live():
+            started = False
+            try:
+                for chunk in m._stream(messages, stop=stop, run_manager=run_manager, **kwargs):
+                    started = True
+                    yield chunk
+                self.used[name] = self.used.get(name, 0) + 1
+                return
+            except Exception as e:  # noqa: BLE001
+                if started:                                            # half an answer is out: cannot switch now
+                    raise
+                self._failed(name, e)
+                last = e
+        raise last or RuntimeError("no model in the chain answered")
+
+
+def gemini_models(spec: str) -> list[str]:
+    """GEMINI_MODEL may name one model or a comma-separated chain, best first."""
+    return [m.strip() for m in spec.split(",") if m.strip()]
+
+
 @lru_cache(maxsize=4)
 def _build(name: str, model: str, base_url: str | None) -> BaseChatModel | None:
     if name == "gemini":
         from langchain_google_genai import ChatGoogleGenerativeAI
 
         key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
-        return ChatGoogleGenerativeAI(model=model, google_api_key=key, temperature=0)
+        names = gemini_models(model)
+        chats = [ChatGoogleGenerativeAI(model=n, google_api_key=key, temperature=0, max_retries=1, timeout=90)
+                 for n in names]
+        return chats[0] if len(chats) == 1 else FallbackChat(models=chats, names=names)
     if name == "openai":
         from langchain_openai import ChatOpenAI
 

@@ -51,7 +51,7 @@ def get_settings() -> Settings:
         dense_weight=float(env("CODEOGRAPH_DENSE_WEIGHT", "0.6")),
         candidates=int(env("CODEOGRAPH_CANDIDATES", "30")),
         llm_provider=env("CODEOGRAPH_LLM", "auto").lower(),
-        gemini_model=env("GEMINI_MODEL", "gemini-2.5-flash"),
+        gemini_model=env("GEMINI_MODEL", "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.5-flash,gemini-2.5-flash"),
         openai_model=env("OPENAI_MODEL", "gpt-4.1-mini"),
         openai_base_url=_none(env("OPENAI_BASE_URL")),
         qdrant_url=_none(env("QDRANT_URL")),

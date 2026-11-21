@@ -86,7 +86,7 @@ Indexing and search need nothing else. Answers and LLM-written reviews need one 
 
 | `CODEOGRAPH_LLM` | Set | Notes |
 |---|---|---|
-| `gemini` | `GOOGLE_API_KEY` | free tier works; `GEMINI_MODEL` (default `gemini-2.5-flash`); `pip install "codeograph[gemini]"` |
+| `gemini` | `GOOGLE_API_KEY` | free tier works; `GEMINI_MODEL` (one model or a chain, default `gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.5-flash,gemini-2.5-flash`: each has its own free daily quota, so the next answers when one runs out); `pip install "codeograph[gemini]"` |
 | `openai` | `OPENAI_BASE_URL`, `OPENAI_API_KEY` | OpenAI or any OpenAI-compatible server: vLLM, Ollama, LM Studio, OpenRouter, Groq; `OPENAI_MODEL` |
 | `auto` (default) | - | Gemini if `GOOGLE_API_KEY`, else OpenAI-compatible if set, else no LLM |
 

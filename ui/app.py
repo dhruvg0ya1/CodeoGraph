@@ -415,18 +415,35 @@ with t_ask:
             final: dict = {}
 
             written = llm_allowed()
+            answer_flags = {"model_failed": False}
 
             def tokens():
                 ctx = contextlib.nullcontext() if written else llm.offline()
-                with ctx:
-                    for kind, payload in agent.stream(question, ns, history=past or None):
-                        if kind == "token":
-                            yield payload
-                        else:
-                            final.update(payload)
+                sent = False
+                try:
+                    with ctx:
+                        for kind, payload in agent.stream(question, ns, history=past or None):
+                            if kind == "token":
+                                sent = True
+                                yield payload
+                            else:
+                                final.update(payload)
+                except Exception:  # noqa: BLE001 - every free model is busy or out of quota: answer without one
+                    if sent:
+                        raise
+                    answer_flags["model_failed"] = True
+                    with llm.offline():
+                        for kind, payload in agent.stream(question, ns, history=past or None):
+                            if kind == "token":
+                                yield payload
+                            else:
+                                final.update(payload)
             with st.spinner("Retrieving, grading and checking citations..."):
                 st.write_stream(tokens())
-            if not written and llm.get_model() is not None:
+            if answer_flags["model_failed"]:
+                st.caption("The free model quota is used up for now, so this answer is extractive (the cited code "
+                           "is still exact).")
+            elif not written and llm.get_model() is not None:
                 st.caption("The demo's daily limit for written answers is used up, so this one is extractive.")
             msg = {"role": "assistant", "content": final.get("answer", ""), "citations": final.get("citations", []),
                    "trace": final.get("trace", [])}

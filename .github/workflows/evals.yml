@@ -70,20 +70,20 @@ jobs:
           path: .codeograph/models
           key: fastembed-v3-answers-${{ github.run_id }}
           restore-keys: fastembed-v3-
-      - name: An LLM - Gemini if the repo has a GOOGLE_API_KEY secret, else Qwen2.5 3B on the runner via Ollama
+      - name: Answer eval (agent answers + citations; RAGAS on the first 5) - Gemini's free model chain, else Qwen2.5 3B
+        # Gemini (when the repo has a GOOGLE_API_KEY secret) runs first through its chain of free models; if every
+        # free quota is gone it falls back to an open model on the runner's CPU via Ollama, so the eval never fails
+        # on an outside quota.
         run: |
-          if [ -n "$GOOGLE_API_KEY" ]; then
-            echo "CODEOGRAPH_LLM=gemini" >> "$GITHUB_ENV"
-          else
-            curl -fsSL https://ollama.com/install.sh | sh
-            (ollama serve > /tmp/ollama.log 2>&1 &)
-            curl -s --retry 40 --retry-all-errors --retry-delay 1 http://localhost:11434/api/version
-            ollama pull qwen2.5:3b
-            { echo "CODEOGRAPH_LLM=openai"; echo "OPENAI_BASE_URL=http://localhost:11434/v1";
-              echo "OPENAI_MODEL=qwen2.5:3b"; echo "OPENAI_API_KEY=ollama"; } >> "$GITHUB_ENV"
-          fi
-      - name: Answer eval (agent answers + citations; RAGAS on the first 5)
-        run: .venv/bin/python evals/answer_eval.py --n 10 --ragas-n 5 --write-readme
+          eval_run() { env "$@" .venv/bin/python evals/answer_eval.py --n 10 --ragas-n 5 --write-readme; }
+          if [ -n "$GOOGLE_API_KEY" ] && eval_run CODEOGRAPH_LLM=gemini; then exit 0; fi
+          [ -n "$GOOGLE_API_KEY" ] && echo "::notice::Gemini's free quota is used up - answering with Qwen2.5 3B"
+          curl -fsSL https://ollama.com/install.sh | sh
+          (ollama serve > /tmp/ollama.log 2>&1 &)
+          curl -s --retry 40 --retry-all-errors --retry-delay 1 http://localhost:11434/api/version
+          ollama pull qwen2.5:3b
+          eval_run CODEOGRAPH_LLM=openai OPENAI_BASE_URL=http://localhost:11434/v1 OPENAI_MODEL=qwen2.5:3b \
+            OPENAI_API_KEY=ollama
       - uses: actions/upload-artifact@v4
         if: always()
         with:
