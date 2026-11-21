@@ -1,0 +1,6 @@
+.git
+.venv
+.codeograph
+**/__pycache__
+evals/results
+tests

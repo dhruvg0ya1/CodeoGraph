@@ -18,3 +18,16 @@ jobs:
         run: .venv/bin/ruff check codeograph tests evals
       - name: Tests (hash embedder, no LLM, no network models)
         run: .venv/bin/pytest -q
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t codeograph .
+      - name: Smoke test - API answers /health and indexes a folder
+        run: |
+          docker run -d --name cg -p 8000:8000 -v "$PWD/tests/fixtures/minirepo:/repo:ro" -e CODEOGRAPH_EMBED_MODEL=hash codeograph
+          curl -sf --retry 30 --retry-connrefused --retry-delay 1 http://localhost:8000/health
+          docker exec cg codeograph index /repo
+          docker exec cg codeograph search repo "charge a card with retries" -k 1 | grep charge_card
