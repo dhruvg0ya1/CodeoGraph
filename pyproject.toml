@@ -8,7 +8,6 @@ version = "2.0.0"
 description = "Grounded answers, change impact and PR review over any codebase: Tree-sitter chunks, hybrid search, a dependency graph, a LangGraph agent and an MCP server."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
 authors = [{ name = "Dhruv Goyal" }]
 keywords = ["rag", "code-search", "langgraph", "mcp", "tree-sitter", "llm", "agents"]
 dependencies = [

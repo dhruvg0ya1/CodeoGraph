@@ -1,0 +1,40 @@
+{"id": "rq01", "question": "How does the library decide whether to drop the Authorization header when a redirect goes to another host?", "targets": ["src/requests/sessions.py::SessionRedirectMixin.should_strip_auth", "src/requests/sessions.py::SessionRedirectMixin.rebuild_auth"]}
+{"id": "rq02", "question": "Where are redirects followed, and how is the maximum number of redirects enforced?", "targets": ["src/requests/sessions.py::SessionRedirectMixin.resolve_redirects"]}
+{"id": "rq03", "question": "How is the HTTP method changed after a 303 See Other redirect?", "targets": ["src/requests/sessions.py::SessionRedirectMixin.rebuild_method"]}
+{"id": "rq04", "question": "Where do environment variables like HTTPS_PROXY and REQUESTS_CA_BUNDLE get merged into the request settings?", "targets": ["src/requests/sessions.py::Session.merge_environment_settings"]}
+{"id": "rq05", "question": "How does it decide that a host should skip the proxy because of the no_proxy setting?", "targets": ["src/requests/utils.py::should_bypass_proxies"]}
+{"id": "rq06", "question": "Where is the connection pool manager for a proxy created and cached?", "targets": ["src/requests/adapters.py::HTTPAdapter.proxy_manager_for"]}
+{"id": "rq07", "question": "Where are TLS certificate verification and client certificate files configured on the connection?", "targets": ["src/requests/adapters.py::HTTPAdapter.cert_verify"]}
+{"id": "rq08", "question": "How does the transport adapter turn a low-level urllib3 response into the library's Response object?", "targets": ["src/requests/adapters.py::HTTPAdapter.build_response"]}
+{"id": "rq09", "question": "Where does the adapter send the request and map socket errors to exceptions such as ConnectTimeout and ReadTimeout?", "targets": ["src/requests/adapters.py::HTTPAdapter.send"]}
+{"id": "rq10", "question": "How is the error message built when a response has a 4xx or 5xx status code?", "targets": ["src/requests/models.py::Response.raise_for_status"]}
+{"id": "rq11", "question": "How is the response body decoded to a string when the server did not declare an encoding?", "targets": ["src/requests/models.py::Response.text", "src/requests/models.py::Response.apparent_encoding"]}
+{"id": "rq12", "question": "How are response bodies streamed in chunks while being decompressed?", "targets": ["src/requests/models.py::Response.iter_content"]}
+{"id": "rq13", "question": "How is a JSON body parsed, and which error is raised when it is not valid JSON?", "targets": ["src/requests/models.py::Response.json"]}
+{"id": "rq14", "question": "How does it guess whether a JSON payload is UTF-8, UTF-16 or UTF-32 from its first bytes?", "targets": ["src/requests/utils.py::guess_json_utf"]}
+{"id": "rq15", "question": "Where is the Link header parsed into a dictionary keyed by relation?", "targets": ["src/requests/models.py::Response.links", "src/requests/utils.py::parse_header_links"]}
+{"id": "rq16", "question": "How is the request body built for multipart file uploads?", "targets": ["src/requests/models.py::RequestEncodingMixin._encode_files"]}
+{"id": "rq17", "question": "How are query parameters and form fields url-encoded?", "targets": ["src/requests/models.py::RequestEncodingMixin._encode_params"]}
+{"id": "rq18", "question": "Where is the URL validated, IDNA-encoded and normalised before a request is sent?", "targets": ["src/requests/models.py::PreparedRequest.prepare_url"]}
+{"id": "rq19", "question": "How is the Content-Length header worked out for different kinds of request body?", "targets": ["src/requests/models.py::PreparedRequest.prepare_content_length", "src/requests/utils.py::super_len"]}
+{"id": "rq20", "question": "How does it measure the length of a file-like object or a string body?", "targets": ["src/requests/utils.py::super_len"]}
+{"id": "rq21", "question": "Where are a username and password embedded in the URL pulled out for authentication?", "targets": ["src/requests/utils.py::get_auth_from_url", "src/requests/models.py::PreparedRequest.prepare_auth"]}
+{"id": "rq22", "question": "How is the HTTP Basic authentication header encoded?", "targets": ["src/requests/auth.py::_basic_auth_str", "src/requests/auth.py::HTTPBasicAuth"]}
+{"id": "rq23", "question": "How does digest authentication compute its response to a 401 challenge?", "targets": ["src/requests/auth.py::HTTPDigestAuth.build_digest_header", "src/requests/auth.py::HTTPDigestAuth.handle_401"]}
+{"id": "rq24", "question": "Where are credentials looked up from the user's netrc file?", "targets": ["src/requests/utils.py::get_netrc_auth"]}
+{"id": "rq25", "question": "How are header names made case-insensitive?", "targets": ["src/requests/structures.py::CaseInsensitiveDict"]}
+{"id": "rq26", "question": "How are cookies from a response stored in the cookie jar?", "targets": ["src/requests/cookies.py::extract_cookies_to_jar"]}
+{"id": "rq27", "question": "How is a plain dictionary turned into a cookie jar?", "targets": ["src/requests/cookies.py::cookiejar_from_dict"]}
+{"id": "rq28", "question": "Where are session-level and request-level settings merged, with None meaning the key is removed?", "targets": ["src/requests/sessions.py::merge_setting"]}
+{"id": "rq29", "question": "How does a session pick the transport adapter for a URL prefix?", "targets": ["src/requests/sessions.py::Session.get_adapter", "src/requests/sessions.py::Session.mount"]}
+{"id": "rq30", "question": "Where are event hooks such as 'response' run on a response?", "targets": ["src/requests/hooks.py::dispatch_hook"]}
+{"id": "rq31", "question": "What is the default User-Agent string, and which headers are sent by default?", "targets": ["src/requests/utils.py::default_user_agent", "src/requests/utils.py::default_headers"]}
+{"id": "rq32", "question": "How are percent-encoded characters in a URI re-quoted safely?", "targets": ["src/requests/utils.py::requote_uri", "src/requests/utils.py::unquote_unreserved"]}
+{"id": "rq33", "question": "Where is a file-like request body rewound before a redirected request is sent again?", "targets": ["src/requests/utils.py::rewind_body"]}
+{"id": "rq34", "question": "How is the right proxy chosen for a URL from the proxies mapping?", "targets": ["src/requests/utils.py::select_proxy"]}
+{"id": "rq35", "question": "How are header values checked so that a newline cannot inject an extra header?", "targets": ["src/requests/utils.py::check_header_validity", "src/requests/utils.py::_validate_header_part"]}
+{"id": "rq36", "question": "Where does the top-level helper used by requests.get create a session and close it afterwards?", "targets": ["src/requests/api.py::request"]}
+{"id": "rq37", "question": "What does `Session.request` do to build and send a request?", "targets": ["src/requests/sessions.py::Session.request"]}
+{"id": "rq38", "question": "What does `prepare_request` merge from the session into the request?", "targets": ["src/requests/sessions.py::Session.prepare_request"]}
+{"id": "rq39", "question": "How is the character encoding read from the Content-Type header?", "targets": ["src/requests/utils.py::get_encoding_from_headers", "src/requests/utils.py::_parse_content_type_header"]}
+{"id": "rq40", "question": "Where does the package check that the installed urllib3 and chardet versions are supported?", "targets": ["src/requests/__init__.py::check_compatibility"]}

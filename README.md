@@ -1,116 +1,196 @@
-# 🤖 CodeoGraph
+# CodeoGraph
 
-**AI-powered codebase understanding agent.** Index any GitHub repo and chat with it, analyze change impact, review PRs, and visualize architecture — all grounded in your actual source code.
+**Grounded answers about any codebase - with citations, change impact and PR review - from Python, a CLI, a REST
+API, a Streamlit UI or any MCP client (Claude Code, Claude Desktop, Cursor).**
 
----
+[![ci](https://github.com/dhruvg0ya1/CodeoGraph/actions/workflows/ci.yml/badge.svg)](https://github.com/dhruvg0ya1/CodeoGraph/actions/workflows/ci.yml)
+[![evals](https://github.com/dhruvg0ya1/CodeoGraph/actions/workflows/evals.yml/badge.svg)](https://github.com/dhruvg0ya1/CodeoGraph/actions/workflows/evals.yml)
 
-## Features
+Most "chat with your repo" tools cut files into fixed-size text and hope the right piece comes back. CodeoGraph
+parses the code, so every function, method and class is its own unit; searches it two ways at once; knows who calls
+what; and answers only from code it can point to by file and line.
 
-| Feature | Description |
+- **AST chunks** - Tree-sitter splits Python, JavaScript and TypeScript into functions, methods (`Session.send`) and
+  classes, with signatures and docstrings. Every other language is indexed in overlapping line windows.
+- **Hybrid search** - BM25 over identifier-aware tokens (`getUserById` -> get, user, by, id) plus dense vectors,
+  fused with Reciprocal Rank Fusion and re-ranked by a cross-encoder. Embeddings run locally (FastEmbed / ONNX):
+  **no API key and no per-call cost** to index or search.
+- **Dependency graph** - imports resolved to files (absolute and relative), calls resolved through imports, `self`
+  and typed variables. "What breaks if I change X" is a reverse walk with hop distance and a risk rating.
+- **A LangGraph agent** - classifies the question, retrieves, grades what it found, rewrites the query when nothing
+  is relevant, answers with `[n]` citations, then verifies every citation points at a retrieved source.
+  Conversation memory per thread.
+- **An MCP server** - 9 tools (index, search, go-to-definition, read file, impact, diff review, diagram, list, ask)
+  so Claude or Cursor can work from your real code. None of them needs an API key.
+- **PR review** - a diff is mapped onto the index by exact line overlap, so the review knows which functions changed
+  and which code outside the diff depends on them.
+- **Measured, in CI** - a retrieval benchmark gates every change to the code; the agent's answers are scored with
+  RAGAS.
+- **Incremental** - unchanged commits are skipped and unchanged functions keep their vectors on re-index.
+
+## Results
+
+### Retrieval
+<!-- RETRIEVAL_EVAL:START -->
+_The evals workflow writes the table here._
+<!-- RETRIEVAL_EVAL:END -->
+
+### Answers
+<!-- ANSWER_EVAL:START -->
+_The evals workflow writes the table here._
+<!-- ANSWER_EVAL:END -->
+
+How these are measured is in [Evaluation](#evaluation).
+
+## Quick start
+
+```bash
+pip install "git+https://github.com/dhruvg0ya1/CodeoGraph"        # Python 3.11+
+
+codeograph index https://github.com/psf/requests                 # or a local folder
+codeograph search psf-requests "how are redirects followed"
+codeograph symbol psf-requests Session.send
+codeograph impact psf-requests merge_environment_settings
+codeograph ask    psf-requests "where is the proxy chosen for a URL?"
+git diff | codeograph review psf-requests -
+```
+
+Indexing and search need nothing else. Answers and LLM-written reviews need one model - pick any:
+
+| `CODEOGRAPH_LLM` | Set | Notes |
+|---|---|---|
+| `gemini` | `GOOGLE_API_KEY` | free tier works; `GEMINI_MODEL` (default `gemini-2.5-flash`); `pip install "codeograph[gemini]"` |
+| `openai` | `OPENAI_BASE_URL`, `OPENAI_API_KEY` | OpenAI or any OpenAI-compatible server: vLLM, Ollama, LM Studio, OpenRouter, Groq; `OPENAI_MODEL` |
+| `github` | `GITHUB_TOKEN` | GitHub Models free tier; `GITHUB_MODEL` (default `openai/gpt-4.1-mini`) |
+| `auto` (default) | - | Gemini if `GOOGLE_API_KEY`, else OpenAI-compatible if set, else no LLM |
+
+With no LLM, the agent still runs and answers extractively: the best matching functions with their locations.
+
+```bash
+# a local model through Ollama (OpenAI-compatible endpoint)
+export CODEOGRAPH_LLM=openai OPENAI_BASE_URL=http://localhost:11434/v1 OPENAI_MODEL=qwen2.5-coder:7b
+```
+
+### Use it from Claude Code, Claude Desktop or Cursor (MCP)
+
+```bash
+claude mcp add codeograph -- codeograph mcp
+```
+
+```json
+{ "mcpServers": { "codeograph": { "command": "codeograph", "args": ["mcp"] } } }
+```
+
+Then ask your assistant to "index https://github.com/owner/repo with codeograph and find where X happens".
+
+| Tool | What it returns |
 |---|---|
-| **AST Chunking** | Tree-sitter extracts functions/classes as semantic chunks, not fixed tokens |
-| **Hybrid Retrieval** | BM25 + vector search fused (0.6/0.4 weighting) for precision and recall |
-| **RAG Chat** | Streaming Gemini responses grounded in retrieved code context |
-| **Symbol Search** | "Go to definition" — find any function or class instantly |
-| **Change Impact** | NetworkX reverse-BFS finds all dependents; Gemini rates each as Low/Medium/High risk |
-| **PR Review** | Paste a git diff → structured review with risks, tests, and risk score |
-| **Architecture Diagram** | Auto-generated Mermaid diagram from static import analysis |
-| **Multi-repo** | Pinecone namespaces isolate repos; switch between them in the sidebar |
+| `index_repository` | indexes a URL or folder (incremental); returns the namespace |
+| `list_repositories` | what is indexed, at which commit |
+| `search_code` | hybrid search, filterable by file and kind (function, method, class, module, type) |
+| `find_symbol` | go-to-definition, with code |
+| `get_file` | a file or a line range from the indexed snapshot |
+| `impact_analysis` | callers and importers, nearest first, with hops and risk |
+| `review_diff` | changed functions, their dependents outside the diff, graph risk (+ LLM review if configured) |
+| `architecture_diagram` | Mermaid diagram of file imports |
+| `ask` | CodeoGraph's own agent (needs an LLM configured for CodeoGraph) |
 
----
-
-## Watch Demo
-
-https://github.com/user-attachments/assets/9c26889f-01f6-42c5-80a6-cae4397459ce
-
-[pls watch the video on yt](https://www.youtube.com/watch?v=HWVfFtDU9rg) 👉🏼👈🏼
-
----
-
-## Setup
-
-### 1. Install dependencies
+### REST API and UI
 
 ```bash
-pip install -r requirements.txt
+codeograph serve --port 8000          # OpenAPI docs at http://localhost:8000/docs
+pip install "codeograph[ui]" && streamlit run ui/app.py
 ```
 
-### 2. Configure API keys
+`POST /index`, `GET /index/status`, `POST /query` (streams the answer, then the cited sources), `POST /ask`,
+`GET /search`, `GET /symbol`, `POST /impact`, `POST /review`, `GET /diagram`, `GET /repos`, `DELETE /repos/{ns}`,
+`GET /health`.
 
-Copy `.env` and fill in your keys:
+## How it works
 
-```bash
-cp .env .env.local
+```mermaid
+flowchart LR
+    A[git URL or folder] --> B[Tree-sitter chunker<br/>functions, methods, classes]
+    B --> C[FastEmbed<br/>bge-small, ONNX, CPU]
+    B --> D[BM25<br/>identifier-aware tokens]
+    A --> E[Dependency graph<br/>imports + calls]
+    C --> F[(index on disk<br/>or Qdrant)]
+    D --> F
+    E --> F
+    F --> G[hybrid search<br/>RRF + cross-encoder]
+    G --> H[LangGraph agent]
+    F --> I[impact / review / diagram]
+    H --> J[CLI / API / UI / MCP]
+    I --> J
 ```
 
-```
-GOOGLE_API_KEY=...       # Google AI Studio — free tier works
-PINECONE_API_KEY=...     # Pinecone serverless — free tier works
-PINECONE_INDEX_NAME=codeograph
-```
+**The agent**
 
-> **Pinecone index** is created automatically on first run (dimension=3072, cosine).
-
-### 3. Start the backend
-
-```bash
-cd backend
-uvicorn main:app --reload --port 8000
-```
-
-### 4. Start the frontend
-
-```bash
-cd frontend
-streamlit run app.py --server.port 8501
+```mermaid
+flowchart LR
+    S((start)) --> C[classify<br/>symbol / impact / question]
+    C --> R[retrieve<br/>search, go-to-def, graph walk]
+    R --> G[grade<br/>LLM keeps useful sources]
+    G -- relevant --> W[generate<br/>answer with citations]
+    G -- nothing useful, retries left --> Q[rewrite query]
+    Q --> R
+    W --> V[verify<br/>drop citations to unseen sources]
+    V --> E((end))
 ```
 
-Open **http://localhost:8501**
+- `classify` is rules, not an LLM call: code identifiers in the question (`snake_case`, `camelCase`, `Dotted.name`,
+  backticks) plus intent words decide between go-to-definition, an impact walk and a general search.
+- `grade` and `rewrite` are a corrective-RAG loop (at most two rewrites).
+- `verify` is deterministic: a citation that does not point at a retrieved source is removed and reported.
+- A LangGraph checkpointer keeps each thread's history, so follow-ups like "and who calls it?" work.
 
----
+**Indexes** live in `~/.codeograph/indexes/<namespace>/` (chunks, vectors, graph, file snapshot) and survive
+restarts. Vectors stay in the index folder (exact search, no locks, so the API, MCP server and CLI can share it) or
+in a Qdrant server when `QDRANT_URL` is set (`pip install "codeograph[qdrant]"`).
 
-## Architecture
+## Evaluation
+
+`evals/retrieval_eval.py` - 40 hand-written questions about [psf/requests](https://github.com/psf/requests)
+v2.32.3, each with the function(s) that answer it. Most describe behaviour in plain English ("how does it decide
+to drop the Authorization header on a redirect to another host?") without naming the function. Every retrieval
+configuration is scored on the same index (Recall@1/5/10, MRR@10, nDCG@10, latency); the default pipeline's
+Recall@5 is a CI gate, so a change that makes search worse fails the build.
+
+`evals/answer_eval.py` - runs the agent on 12 of those questions with an LLM from GitHub Models (the workflow's own
+token, no paid key) and scores each answer: does it cite the expected function, does every answer carry a valid
+citation, how many citations the verify step removed, plus RAGAS faithfulness and context precision.
+
+Both run in [`evals.yml`](.github/workflows/evals.yml) on every change to the code and weekly, and write the
+tables above. The unit and integration tests (`pytest`) run on every push on Python 3.11 and 3.12 with a
+download-free hash embedder and fake chat models, so they need no network or keys.
+
+## Configuration
+
+| Variable | Default | |
+|---|---|---|
+| `CODEOGRAPH_HOME` | `~/.codeograph` | indexes and downloaded models |
+| `CODEOGRAPH_EMBED_MODEL` | `BAAI/bge-small-en-v1.5` | any FastEmbed text model, e.g. `jinaai/jina-embeddings-v2-base-code` |
+| `CODEOGRAPH_RERANK_MODEL` | `Xenova/ms-marco-MiniLM-L-6-v2` | `none` switches reranking off |
+| `CODEOGRAPH_FUSION` | `rrf` | or `weighted` (0.6 dense / 0.4 BM25, the v1 behaviour) |
+| `CODEOGRAPH_LLM` | `auto` | `gemini`, `openai`, `github`, `none` |
+| `QDRANT_URL` / `QDRANT_API_KEY` | - | store vectors in Qdrant instead of the index folder |
+
+## Project layout
 
 ```
-frontend/app.py (Streamlit)
-        │  HTTP / SSE
-        ▼
-backend/main.py (FastAPI)
-    ├── ingestion.py   → GitPython clone → Tree-sitter parse → Google Embed → Pinecone upsert
-    ├── retrieval.py   → Pinecone vector search + BM25 → score fusion
-    ├── graph.py       → NetworkX reverse-BFS → Gemini risk assessment
-    ├── pr_review.py   → Diff parser → context retrieval → Gemini review
-    └── diagram.py     → Graph → Mermaid syntax
+codeograph/   chunking, depgraph, embeddings, store, indexer, search, impact, review, diagram,
+              llm, agent (LangGraph), mcp_server, api (FastAPI), cli
+ui/app.py     Streamlit front end
+evals/        retrieval + answer benchmarks, datasets, results
+tests/        unit and integration tests on a small mixed-language fixture repo
 ```
 
----
+## Limitations
 
-## Tech Stack
+- Call resolution is static and best-effort: dynamic dispatch, monkey-patching and calls through untyped
+  variables are not followed, so impact analysis can miss dependents (it does not invent them).
+- Symbol extraction covers Python, JavaScript and TypeScript; other languages are searched as line windows and
+  have no call graph.
+- In the answer eval, the judge is the same model that writes the answers.
 
-- **LLM**: Gemini 2.5 Flash (streaming)
-- **Embeddings**: Google `models/gemini-embedding-2` (3072d)
-- **Vector DB**: Pinecone serverless (cosine)
-- **Code Parsing**: Tree-sitter (Python + JavaScript grammars)
-- **Keyword Search**: BM25Okapi via `rank-bm25`
-- **Dependency Graph**: NetworkX DiGraph
-- **Repo Ingestion**: GitPython
-- **Backend**: FastAPI + uvicorn
-- **Frontend**: Streamlit
-
----
-
-## Notes
-
-- **Server restart** clears BM25 corpus and dependency graphs from memory. Pinecone data persists. Re-querying will still work (vector search only); re-indexing restores BM25 + graphs.
-- **Rate limits**: Embedding batches sleep 1s between calls. For large repos (500+ files) expect 5–15 min indexing.
-- **Pinecone index dimension**: If the existing index was created with a different embedding model, delete it or set a new `PINECONE_INDEX_NAME` before re-indexing.
-- **Token safety**: Prompts are capped at 6000 context tokens before sending to Gemini.
-
-
-## Interface (mockup)
-
-![CodeoGraph UI](./screenshots/01_codebase_graph_and_search.png)
-
-## Walkthrough (mockup)
-
-An animated mockup of the interface (rendered from HTML, not a screen recording of the running app) is at [`videos/loom_demo_walkthrough.mp4`](./videos/loom_demo_walkthrough.mp4).
+The [v1 demo video](https://www.youtube.com/watch?v=HWVfFtDU9rg) shows the original interface.
