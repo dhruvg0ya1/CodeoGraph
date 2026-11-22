@@ -5,6 +5,18 @@ backgroundColor = "#0d1b1b"
 secondaryBackgroundColor = "#0f1f1f"
 textColor = "#c8e8e8"
 font = "sans serif"
+# Readability: 16 px body text, square corners, code and tables on the app's own teal palette
+# (Streamlit's dark defaults put inline code on a brown background and table headers in faded grey).
+baseFontSize = 16
+baseRadius = "none"
+linkColor = "#2fc7bd"
+codeBackgroundColor = "#0a1a1a"
+codeTextColor = "#d4eeee"
+codeFontSize = "0.86rem"
+borderColor = "#0d7377"
+dataframeBorderColor = "#164848"
+dataframeHeaderBackgroundColor = "#0a1a1a"
+dataframeHeaderTextColor = "#14f0f0"
 
 [browser]
 gatherUsageStats = false
